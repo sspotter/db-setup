@@ -82,12 +82,26 @@ function loadDbUrl(envVar) {
     return url.trim();
 }
 
-/** Strip psql meta-commands and ownership lines so a pg_dump applies on a fresh DB. */
+// Session-tuning SET parameters in the pg_dump preamble that are irrelevant to
+// creating the schema and may be rejected by older servers or a connection
+// pooler. `transaction_timeout` in particular only exists in PostgreSQL 17+,
+// so applying an 18.x dump through anything older fails with
+// "unrecognized configuration parameter". These are safe to drop.
+const SKIP_SET_PARAMS = [
+    'statement_timeout',
+    'lock_timeout',
+    'idle_in_transaction_session_timeout',
+    'transaction_timeout',
+];
+const SKIP_SET_RE = new RegExp(`^\\s*SET\\s+(${SKIP_SET_PARAMS.join('|')})\\b`, 'i');
+
+/** Strip psql meta-commands, ownership lines, and version-sensitive SET params. */
 function cleanSchema(sql) {
     return sql
         .split(/\r?\n/)
         .filter((line) => !/^\s*\\/.test(line)) // \restrict, \unrestrict, etc.
         .filter((line) => !/\bOWNER TO\b/i.test(line)) // ownership -> defaults to connecting role
+        .filter((line) => !SKIP_SET_RE.test(line)) // version/pooler-sensitive timeouts
         .join('\n');
 }
 
