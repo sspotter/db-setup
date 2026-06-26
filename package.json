@@ -4,7 +4,8 @@
   "private": true,
   "description": "Standalone, idempotent bootstrapper for the local PostgreSQL databases used by the tiksurfer and insta-surfer (prisma) backends.",
   "scripts": {
-    "create": "node create-databases.js"
+    "create": "node create-databases.js",
+    "recreate": "node create-databases.js --force"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

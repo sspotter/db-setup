@@ -125,9 +125,10 @@ function sslFor(dbUrl) {
     return isLocalHost(dbUrl) ? false : { rejectUnauthorized: false };
 }
 
-async function ensureDatabase(project) {
+async function ensureDatabase(project, { force = false } = {}) {
     const dbUrl = loadDbUrl(project.envVar);
     const name = targetDbName(dbUrl);
+    let status = 'created';
 
     // Step 1: check existence via the maintenance DB.
     const admin = new Client({ connectionString: maintenanceUrl(dbUrl), ssl: sslFor(dbUrl) });
@@ -138,9 +139,16 @@ async function ensureDatabase(project) {
             [name]
         );
         if (rowCount > 0) {
-            return { name, status: 'skipped' };
+            if (!force) {
+                return { name, status: 'skipped' };
+            }
+            // Destructive: drop the existing database (and all its data) and rebuild.
+            // WITH (FORCE) terminates any open connections (PostgreSQL 13+).
+            console.log(`[${project.name}] --force: dropping existing database "${name}"...`);
+            await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
+            status = 'recreated';
         }
-        console.log(`[${project.name}] database "${name}" missing -> creating...`);
+        console.log(`[${project.name}] creating database "${name}"...`);
         await admin.query(`CREATE DATABASE "${name}"`);
     } finally {
         await admin.end();
@@ -174,18 +182,30 @@ async function ensureDatabase(project) {
         await db.end();
     }
 
-    return { name, status: 'created' };
+    return { name, status };
 }
 
+const STATUS_LABELS = {
+    created: 'CREATED + seeded',
+    recreated: 'DROPPED + recreated + seeded',
+    skipped: 'skipped (already exists)',
+};
+
 async function main() {
-    console.log('--- Local database bootstrap started ---\n');
+    const force = process.argv.slice(2).some((a) => a === '--force' || a === '-f');
+
+    console.log('--- Local database bootstrap started ---');
+    if (force) {
+        console.log('!!! --force: existing databases will be DROPPED and rebuilt from scratch !!!');
+    }
+    console.log('');
     const results = [];
 
     for (const project of PROJECTS) {
         try {
-            const res = await ensureDatabase(project);
+            const res = await ensureDatabase(project, { force });
             results.push({ project: project.name, ...res, ok: true });
-            const label = res.status === 'created' ? 'CREATED + seeded' : 'skipped (already exists)';
+            const label = STATUS_LABELS[res.status] || res.status;
             console.log(`[${project.name}] ${label}: "${res.name}"\n`);
         } catch (err) {
             results.push({ project: project.name, status: 'failed', ok: false, error: err.message });

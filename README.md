@@ -52,8 +52,21 @@ does not stop the other; the script exits non-zero if any project failed.
 cd db-setup
 cp .env.example .env   # then fill in the password
 npm install
-npm run create         # or: node create-databases.js
+npm run create         # idempotent: create missing DBs, skip existing ones
 ```
+
+### Drop & recreate (destructive)
+
+To rebuild a database from scratch — **dropping it and all its data** — use
+`--force`:
+
+```bash
+npm run recreate       # or: node create-databases.js --force
+```
+
+With `--force`, an existing database is `DROP DATABASE ... WITH (FORCE)`'d
+(open connections are terminated) and rebuilt from the schema file. Without it,
+existing databases are left untouched.
 
 ## Configuration
 
