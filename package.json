@@ -1,0 +1,13 @@
+{
+  "name": "db-setup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone, idempotent bootstrapper for the local PostgreSQL databases used by the tiksurfer and insta-surfer (prisma) backends.",
+  "scripts": {
+    "create": "node create-databases.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.5"
+  }
+}
