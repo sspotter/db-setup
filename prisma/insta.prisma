@@ -1,0 +1,228 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/insta"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("INSTA_DATABASE_URL")
+}
+
+model comment_scrape_logs {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?   @db.Uuid
+  post_shortcode   String?   @db.VarChar(255)
+  api_calls        Int?      @default(0)
+  comments_scraped Int?      @default(0)
+  scraped_at       DateTime? @default(now()) @db.Timestamptz(6)
+  posts            posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  users            users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_comment_scrape_logs_post")
+}
+
+model comments {
+  id              String    @id @db.VarChar(255)
+  post_shortcode  String    @db.VarChar(255)
+  username        String?   @db.VarChar(255)
+  user_id         String?   @db.VarChar(255)
+  text            String?
+  likes_count     Int?      @default(0)
+  reply_count     Int?      @default(0)
+  profile_pic_url String?
+  commented_at    DateTime? @db.Timestamptz(6)
+  scraped_at      DateTime? @default(now()) @db.Timestamptz(6)
+  posts           posts     @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_comments_post")
+  @@index([username], map: "idx_comments_username")
+}
+
+model ig_users {
+  id                String             @id @db.VarChar(255)
+  username          String             @unique @db.VarChar(255)
+  follower_count    BigInt?            @default(0)
+  following_count   BigInt?            @default(0)
+  media_count       Int?               @default(0)
+  biography         String?
+  external_url      String?
+  business_category String?            @db.VarChar(255)
+  is_verified       Boolean?           @default(false)
+  role              String?            @default("reference") @db.VarChar(50)
+  scraped_at        DateTime?          @default(now()) @db.Timestamptz(6)
+  post_relations    post_relations[]
+  posts             posts[]
+  project_profiles  project_profiles[]
+}
+
+model post_metrics_history {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  post_shortcode   String?   @db.VarChar(255)
+  likes_count      Int?      @default(0)
+  comments_count   Int?      @default(0)
+  video_view_count Int?      @default(0)
+  captured_at      DateTime? @default(now()) @db.Timestamptz(6)
+  posts            posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_metrics_post")
+}
+
+model post_relations {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  post_shortcode String?   @db.VarChar(255)
+  username       String?   @db.VarChar(255)
+  relation_type  String    @db.VarChar(50)
+  posts          posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  ig_users       ig_users? @relation(fields: [username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_relations_post")
+  @@index([username], map: "idx_relations_user")
+}
+
+model posts {
+  shortcode            String                 @id @db.VarChar(255)
+  owner_username       String?                @db.VarChar(255)
+  post_url             String?
+  caption              String?
+  image_url            String?
+  video_url            String?
+  is_video             Boolean?               @default(false)
+  is_carousel          Boolean?               @default(false)
+  is_paid              Boolean?               @default(false)
+  classification       String?                @default("Normal Post") @db.VarChar(100)
+  type                 String?                @default("normal") @db.VarChar(50)
+  collective_reach     BigInt?                @default(0)
+  reach_breakdown      Json?                  @default("[]")
+  scraped_from_profile String?                @db.VarChar(255)
+  is_reference         Boolean?               @default(false)
+  posted_at            DateTime?              @db.Timestamptz(6)
+  first_captured_at    DateTime?              @default(now()) @db.Timestamptz(6)
+  last_updated_at      DateTime?              @default(now()) @db.Timestamptz(6)
+  comment_scrape_logs  comment_scrape_logs[]
+  comments             comments[]
+  post_metrics_history post_metrics_history[]
+  post_relations       post_relations[]
+  ig_users             ig_users?              @relation(fields: [owner_username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+  project_posts        project_posts[]
+  scrape_jobs          scrape_jobs[]
+  user_scraped_posts   user_scraped_posts[]
+
+  @@index([owner_username], map: "idx_posts_owner")
+  @@index([type], map: "idx_posts_type")
+}
+
+model project_posts {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id     String    @db.Uuid
+  post_shortcode String    @db.VarChar(255)
+  added_at       DateTime? @default(now()) @db.Timestamptz(6)
+  posts          posts     @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  projects       projects  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, post_shortcode])
+  @@index([post_shortcode], map: "idx_project_posts_post")
+  @@index([project_id], map: "idx_project_posts_project")
+}
+
+model project_profiles {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id String    @db.Uuid
+  username   String    @db.VarChar(255)
+  role       String?   @default("tracked") @db.VarChar(50)
+  added_at   DateTime? @default(now()) @db.Timestamptz(6)
+  pinned     Boolean?  @default(false)
+  projects   projects  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ig_users   ig_users  @relation(fields: [username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, username])
+  @@index([project_id], map: "idx_project_profiles_project")
+  @@index([username], map: "idx_project_profiles_username")
+}
+
+model projects {
+  id               String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String             @db.Uuid
+  name             String             @db.VarChar(255)
+  description      String?
+  created_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?          @default(now()) @db.Timestamptz(6)
+  project_posts    project_posts[]
+  project_profiles project_profiles[]
+  users            users              @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  scrape_sessions  scrape_sessions[]
+
+  @@index([user_id], map: "idx_projects_user")
+}
+
+model scrape_jobs {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  session_id       String          @db.Uuid
+  post_shortcode   String          @db.VarChar(255)
+  page_number      Int?            @default(1)
+  status           String?         @default("pending") @db.VarChar(50)
+  end_cursor       String?         @default("")
+  comments_scraped Int?            @default(0)
+  retry_count      Int?            @default(0)
+  max_retries      Int?            @default(3)
+  error_message    String?
+  created_at       DateTime?       @default(now()) @db.Timestamptz(6)
+  started_at       DateTime?       @db.Timestamptz(6)
+  completed_at     DateTime?       @db.Timestamptz(6)
+  posts            posts           @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  scrape_sessions  scrape_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_scrape_jobs_post")
+  @@index([session_id], map: "idx_scrape_jobs_session")
+  @@index([status], map: "idx_scrape_jobs_status")
+}
+
+model scrape_sessions {
+  id                     String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                String?       @db.Uuid
+  profile_username       String?       @db.VarChar(255)
+  status                 String?       @default("pending") @db.VarChar(50)
+  total_posts            Int?          @default(0)
+  total_jobs             Int?          @default(0)
+  completed_jobs         Int?          @default(0)
+  total_comments_scraped Int?          @default(0)
+  created_at             DateTime?     @default(now()) @db.Timestamptz(6)
+  started_at             DateTime?     @db.Timestamptz(6)
+  completed_at           DateTime?     @db.Timestamptz(6)
+  project_id             String?       @db.Uuid
+  scrape_jobs            scrape_jobs[]
+  projects               projects?     @relation(fields: [project_id], references: [id], onUpdate: NoAction)
+  users                  users?        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([project_id], map: "idx_scrape_sessions_project")
+  @@index([status], map: "idx_scrape_sessions_status")
+  @@index([user_id], map: "idx_scrape_sessions_user")
+}
+
+model user_scraped_posts {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String?   @db.Uuid
+  post_shortcode String?   @db.VarChar(255)
+  scraped_at     DateTime? @default(now()) @db.Timestamptz(6)
+  posts          posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  users          users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, post_shortcode])
+  @@index([post_shortcode], map: "idx_user_scraped_posts_post")
+  @@index([user_id], map: "idx_user_scraped_posts_user")
+}
+
+model users {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email               String                @unique @db.VarChar(255)
+  password_hash       String                @db.VarChar(255)
+  status              String?               @default("active") @db.VarChar(50)
+  plan                String?               @default("none") @db.VarChar(50)
+  active_sessions     Int?                  @default(0)
+  last_login          DateTime?             @db.Timestamptz(6)
+  max_devices         Int?                  @default(3)
+  created_at          DateTime?             @default(now()) @db.Timestamptz(6)
+  comment_scrape_logs comment_scrape_logs[]
+  projects            projects[]
+  scrape_sessions     scrape_sessions[]
+  user_scraped_posts  user_scraped_posts[]
+}

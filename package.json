@@ -5,10 +5,18 @@
   "description": "Standalone, idempotent bootstrapper for the local PostgreSQL databases used by the tiksurfer and insta-surfer (prisma) backends.",
   "scripts": {
     "create": "node create-databases.js",
-    "recreate": "node create-databases.js --force"
+    "recreate": "node create-databases.js --force",
+    "introspect": "npm run introspect:tiksurfer && npm run introspect:insta",
+    "introspect:tiksurfer": "prisma db pull --schema prisma/tiksurfer.prisma",
+    "introspect:insta": "prisma db pull --schema prisma/insta.prisma",
+    "studio:tiksurfer": "prisma studio --schema prisma/tiksurfer.prisma --port 5555",
+    "studio:insta": "prisma studio --schema prisma/insta.prisma --port 5556"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "pg": "^8.11.5"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.3"
   }
 }

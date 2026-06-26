@@ -1,0 +1,417 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/tiksurfer"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TIKSURFER_DATABASE_URL")
+}
+
+model comment_scrape_logs {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id          String?   @db.Uuid
+  post_shortcode   String?   @db.VarChar(255)
+  api_calls        Int?      @default(0)
+  comments_scraped Int?      @default(0)
+  scraped_at       DateTime? @default(now()) @db.Timestamptz(6)
+  posts            posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  users            users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_comment_scrape_logs_post")
+}
+
+model comments {
+  id              String    @id @db.VarChar(255)
+  post_shortcode  String    @db.VarChar(255)
+  username        String?   @db.VarChar(255)
+  user_id         String?   @db.VarChar(255)
+  text            String?
+  likes_count     Int?      @default(0)
+  reply_count     Int?      @default(0)
+  profile_pic_url String?
+  commented_at    DateTime? @db.Timestamptz(6)
+  scraped_at      DateTime? @default(now()) @db.Timestamptz(6)
+  posts           posts     @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_comments_post")
+  @@index([username], map: "idx_comments_username")
+}
+
+model ig_users {
+  id                String             @id @db.VarChar(255)
+  username          String             @unique @db.VarChar(255)
+  follower_count    BigInt?            @default(0)
+  following_count   BigInt?            @default(0)
+  media_count       Int?               @default(0)
+  biography         String?
+  external_url      String?
+  business_category String?            @db.VarChar(255)
+  is_verified       Boolean?           @default(false)
+  role              String?            @default("reference") @db.VarChar(50)
+  scraped_at        DateTime?          @default(now()) @db.Timestamptz(6)
+  post_relations    post_relations[]
+  posts             posts[]
+  project_profiles  project_profiles[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model keyword_search_sessions {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyword_id              String                    @db.Uuid
+  project_id              String                    @db.Uuid
+  status                  String                    @default("active") @db.VarChar(50)
+  videos_captured         Int?                      @default(0)
+  scroll_position         Int?                      @default(0)
+  started_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  ended_at                DateTime?                 @db.Timestamptz(6)
+  created_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  search_keywords         search_keywords           @relation(fields: [keyword_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  projects                projects                  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tiktok_graphql_captures tiktok_graphql_captures[]
+  tiktok_videos           tiktok_videos[]
+
+  @@index([keyword_id], map: "idx_kw_sessions_keyword")
+  @@index([project_id], map: "idx_kw_sessions_project")
+  @@index([status], map: "idx_kw_sessions_status")
+}
+
+model post_metrics_history {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  post_shortcode   String?   @db.VarChar(255)
+  likes_count      Int?      @default(0)
+  comments_count   Int?      @default(0)
+  video_view_count Int?      @default(0)
+  view_count       BigInt?   @default(0)
+  repost_count     Int?      @default(0)
+  share_count      Int?      @default(0)
+  bookmark_count   Int?      @default(0)
+  captured_at      DateTime? @default(now()) @db.Timestamptz(6)
+  posts            posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_metrics_post")
+}
+
+model post_relations {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  post_shortcode String?   @db.VarChar(255)
+  username       String?   @db.VarChar(255)
+  relation_type  String    @db.VarChar(50)
+  posts          posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  ig_users       ig_users? @relation(fields: [username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_relations_post")
+  @@index([username], map: "idx_relations_user")
+}
+
+model posts {
+  shortcode            String                 @id @db.VarChar(255)
+  owner_username       String?                @db.VarChar(255)
+  post_url             String?
+  caption              String?
+  image_url            String?
+  video_url            String?
+  is_video             Boolean?               @default(false)
+  is_carousel          Boolean?               @default(false)
+  is_paid              Boolean?               @default(false)
+  classification       String?                @default("Normal Post") @db.VarChar(100)
+  type                 String?                @default("normal") @db.VarChar(50)
+  collective_reach     BigInt?                @default(0)
+  reach_breakdown      Json?                  @default("[]")
+  scraped_from_profile String?                @db.VarChar(255)
+  is_reference         Boolean?               @default(false)
+  view_count           BigInt?                @default(0)
+  repost_count         Int?                   @default(0)
+  share_count          Int?                   @default(0)
+  bookmark_count       Int?                   @default(0)
+  posted_at            DateTime?              @db.Timestamptz(6)
+  first_captured_at    DateTime?              @default(now()) @db.Timestamptz(6)
+  last_updated_at      DateTime?              @default(now()) @db.Timestamptz(6)
+  comment_scrape_logs  comment_scrape_logs[]
+  comments             comments[]
+  post_metrics_history post_metrics_history[]
+  post_relations       post_relations[]
+  ig_users             ig_users?              @relation(fields: [owner_username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+  project_posts        project_posts[]
+  scrape_jobs          scrape_jobs[]
+  user_scraped_posts   user_scraped_posts[]
+
+  @@index([owner_username], map: "idx_posts_owner")
+  @@index([type], map: "idx_posts_type")
+}
+
+model project_posts {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id     String    @db.Uuid
+  post_shortcode String    @db.VarChar(255)
+  added_at       DateTime? @default(now()) @db.Timestamptz(6)
+  posts          posts     @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  projects       projects  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, post_shortcode])
+  @@index([post_shortcode], map: "idx_project_posts_post")
+  @@index([project_id], map: "idx_project_posts_project")
+}
+
+model project_profiles {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id String    @db.Uuid
+  username   String    @db.VarChar(255)
+  role       String?   @default("tracked") @db.VarChar(50)
+  added_at   DateTime? @default(now()) @db.Timestamptz(6)
+  pinned     Boolean?  @default(false)
+  projects   projects  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ig_users   ig_users  @relation(fields: [username], references: [username], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([project_id, username])
+  @@index([project_id], map: "idx_project_profiles_project")
+  @@index([username], map: "idx_project_profiles_username")
+}
+
+model projects {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                 String                    @db.Uuid
+  name                    String                    @db.VarChar(255)
+  description             String?
+  created_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  keyword_search_sessions keyword_search_sessions[]
+  project_posts           project_posts[]
+  project_profiles        project_profiles[]
+  users                   users                     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  scrape_sessions         scrape_sessions[]
+  search_keywords         search_keywords[]
+  tiktok_videos           tiktok_videos[]
+
+  @@index([user_id], map: "idx_projects_user")
+}
+
+model scrape_jobs {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  session_id       String          @db.Uuid
+  post_shortcode   String          @db.VarChar(255)
+  page_number      Int?            @default(1)
+  status           String?         @default("pending") @db.VarChar(50)
+  end_cursor       String?         @default("")
+  comments_scraped Int?            @default(0)
+  retry_count      Int?            @default(0)
+  max_retries      Int?            @default(3)
+  error_message    String?
+  created_at       DateTime?       @default(now()) @db.Timestamptz(6)
+  started_at       DateTime?       @db.Timestamptz(6)
+  completed_at     DateTime?       @db.Timestamptz(6)
+  posts            posts           @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  scrape_sessions  scrape_sessions @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([post_shortcode], map: "idx_scrape_jobs_post")
+  @@index([session_id], map: "idx_scrape_jobs_session")
+  @@index([status], map: "idx_scrape_jobs_status")
+}
+
+model scrape_sessions {
+  id                     String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id                String?       @db.Uuid
+  profile_username       String?       @db.VarChar(255)
+  status                 String?       @default("pending") @db.VarChar(50)
+  total_posts            Int?          @default(0)
+  total_jobs             Int?          @default(0)
+  completed_jobs         Int?          @default(0)
+  total_comments_scraped Int?          @default(0)
+  created_at             DateTime?     @default(now()) @db.Timestamptz(6)
+  started_at             DateTime?     @db.Timestamptz(6)
+  completed_at           DateTime?     @db.Timestamptz(6)
+  project_id             String?       @db.Uuid
+  scrape_jobs            scrape_jobs[]
+  projects               projects?     @relation(fields: [project_id], references: [id], onUpdate: NoAction)
+  users                  users?        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([project_id], map: "idx_scrape_sessions_project")
+  @@index([status], map: "idx_scrape_sessions_status")
+  @@index([user_id], map: "idx_scrape_sessions_user")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model search_keywords {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  project_id              String                    @db.Uuid
+  keyword                 String                    @db.VarChar(255)
+  platform                String                    @default("tiktok") @db.VarChar(50)
+  status                  String                    @default("active") @db.VarChar(50)
+  total_videos            Int?                      @default(0)
+  total_creators          Int?                      @default(0)
+  total_views             BigInt?                   @default(0)
+  total_engagement        BigInt?                   @default(0)
+  created_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                 @default(now()) @db.Timestamptz(6)
+  keyword_search_sessions keyword_search_sessions[]
+  projects                projects                  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tiktok_comments         tiktok_comments[]
+  tiktok_graphql_captures tiktok_graphql_captures[]
+  tiktok_hashtags         tiktok_hashtags[]
+  tiktok_keyword_creators tiktok_keyword_creators[]
+  tiktok_videos           tiktok_videos[]
+
+  @@unique([project_id, keyword], map: "search_keywords_project_keyword_unique")
+  @@index([keyword], map: "idx_search_keywords_keyword")
+  @@index([project_id], map: "idx_search_keywords_project")
+}
+
+model tiktok_comments {
+  id                   String           @id @db.VarChar(255)
+  video_id             String           @db.VarChar(255)
+  keyword_id           String?          @db.Uuid
+  commenter_username   String?          @db.VarChar(255)
+  commenter_user_id    String?          @db.VarChar(255)
+  commenter_avatar_url String?
+  text                 String?
+  likes_count          Int?             @default(0)
+  reply_count          Int?             @default(0)
+  is_reply             Boolean?         @default(false)
+  parent_comment_id    String?          @db.VarChar(255)
+  commented_at         DateTime?        @db.Timestamptz(6)
+  scraped_at           DateTime?        @default(now()) @db.Timestamptz(6)
+  search_keywords      search_keywords? @relation(fields: [keyword_id], references: [id], onUpdate: NoAction)
+
+  @@index([keyword_id], map: "idx_tiktok_comments_keyword")
+  @@index([commenter_username], map: "idx_tiktok_comments_username")
+  @@index([video_id], map: "idx_tiktok_comments_video")
+}
+
+model tiktok_creators {
+  id                      String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tiktok_user_id          String                    @unique(map: "tiktok_creators_tiktok_user_id_unique") @db.VarChar(255)
+  username                String                    @unique(map: "tiktok_creators_username_unique") @db.VarChar(255)
+  display_name            String?                   @db.VarChar(255)
+  avatar_url              String?
+  follower_count          BigInt?                   @default(0)
+  following_count         Int?                      @default(0)
+  video_count             Int?                      @default(0)
+  biography               String?
+  is_verified             Boolean?                  @default(false)
+  first_seen_at           DateTime?                 @default(now()) @db.Timestamptz(6)
+  last_updated_at         DateTime?                 @default(now()) @db.Timestamptz(6)
+  tiktok_keyword_creators tiktok_keyword_creators[]
+  tiktok_videos           tiktok_videos[]
+
+  @@index([username], map: "idx_tiktok_creators_username")
+}
+
+model tiktok_graphql_captures {
+  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  session_id              String?                  @db.Uuid
+  keyword_id              String?                  @db.Uuid
+  video_id                String?                  @db.VarChar(255)
+  creator_id              String?                  @db.Uuid
+  url                     String
+  method                  String?                  @default("GET") @db.VarChar(10)
+  capture_type            String?                  @default("unknown") @db.VarChar(50)
+  request_body            Json?
+  response_body           Json?
+  captured_at             DateTime?                @default(now()) @db.Timestamptz(6)
+  search_keywords         search_keywords?         @relation(fields: [keyword_id], references: [id], onUpdate: NoAction)
+  keyword_search_sessions keyword_search_sessions? @relation(fields: [session_id], references: [id], onUpdate: NoAction)
+
+  @@index([keyword_id], map: "idx_graphql_captures_keyword")
+  @@index([session_id], map: "idx_graphql_captures_session")
+  @@index([capture_type], map: "idx_graphql_captures_type")
+  @@index([video_id], map: "idx_graphql_captures_video")
+}
+
+model tiktok_hashtags {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  video_id        String           @db.VarChar(255)
+  keyword_id      String?          @db.Uuid
+  tag             String           @db.VarChar(255)
+  view_count      BigInt?          @default(0)
+  search_keywords search_keywords? @relation(fields: [keyword_id], references: [id], onUpdate: NoAction)
+
+  @@unique([video_id, tag], map: "tiktok_hashtags_video_tag_unique")
+  @@index([keyword_id], map: "idx_tiktok_hashtags_keyword")
+  @@index([tag], map: "idx_tiktok_hashtags_tag")
+  @@index([video_id], map: "idx_tiktok_hashtags_video")
+}
+
+model tiktok_keyword_creators {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  keyword_id      String          @db.Uuid
+  creator_id      String          @db.Uuid
+  video_count     Int?            @default(1)
+  total_views     BigInt?         @default(0)
+  first_seen_at   DateTime?       @default(now()) @db.Timestamptz(6)
+  last_seen_at    DateTime?       @default(now()) @db.Timestamptz(6)
+  tiktok_creators tiktok_creators @relation(fields: [creator_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "tiktok_keyword_creators_creator_fkey")
+  search_keywords search_keywords @relation(fields: [keyword_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "tiktok_keyword_creators_keyword_fkey")
+
+  @@unique([keyword_id, creator_id], map: "tiktok_keyword_creators_unique")
+  @@index([creator_id], map: "idx_kw_creators_creator")
+  @@index([keyword_id], map: "idx_kw_creators_keyword")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model tiktok_videos {
+  id                      String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  video_id                String                   @db.VarChar(255)
+  keyword_id              String                   @db.Uuid
+  session_id              String?                  @db.Uuid
+  creator_id              String?                  @db.Uuid
+  project_id              String                   @db.Uuid
+  caption                 String?
+  video_url               String?
+  thumbnail_url           String?
+  duration                Int?                     @default(0)
+  views_count             BigInt?                  @default(0)
+  likes_count             BigInt?                  @default(0)
+  comments_count          Int?                     @default(0)
+  shares_count            Int?                     @default(0)
+  bookmarks_count         Int?                     @default(0)
+  included_in_reach       Boolean?                 @default(true)
+  included_in_engagement  Boolean?                 @default(true)
+  included_in_reporting   Boolean?                 @default(true)
+  manual_reviewed         Boolean?                 @default(false)
+  relevance_score         Int?                     @default(0)
+  capture_status          String                   @default("captured") @db.VarChar(50)
+  posted_at               DateTime?                @db.Timestamptz(6)
+  captured_at             DateTime?                @default(now()) @db.Timestamptz(6)
+  updated_at              DateTime?                @default(now()) @db.Timestamptz(6)
+  tiktok_creators         tiktok_creators?         @relation(fields: [creator_id], references: [id], onUpdate: NoAction)
+  search_keywords         search_keywords          @relation(fields: [keyword_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  projects                projects                 @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  keyword_search_sessions keyword_search_sessions? @relation(fields: [session_id], references: [id], onUpdate: NoAction)
+
+  @@unique([video_id, keyword_id], map: "tiktok_videos_video_keyword_unique")
+  @@index([capture_status], map: "idx_tiktok_videos_capture_status")
+  @@index([creator_id], map: "idx_tiktok_videos_creator")
+  @@index([included_in_reach], map: "idx_tiktok_videos_included_reach")
+  @@index([keyword_id], map: "idx_tiktok_videos_keyword")
+  @@index([project_id], map: "idx_tiktok_videos_project")
+  @@index([session_id], map: "idx_tiktok_videos_session")
+}
+
+model user_scraped_posts {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id        String?   @db.Uuid
+  post_shortcode String?   @db.VarChar(255)
+  scraped_at     DateTime? @default(now()) @db.Timestamptz(6)
+  posts          posts?    @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
+  users          users?    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, post_shortcode])
+  @@index([post_shortcode], map: "idx_user_scraped_posts_post")
+  @@index([user_id], map: "idx_user_scraped_posts_user")
+}
+
+model users {
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email               String                @unique @db.VarChar(255)
+  password_hash       String                @db.VarChar(255)
+  status              String?               @default("active") @db.VarChar(50)
+  plan                String?               @default("none") @db.VarChar(50)
+  active_sessions     Int?                  @default(0)
+  last_login          DateTime?             @db.Timestamptz(6)
+  max_devices         Int?                  @default(3)
+  created_at          DateTime?             @default(now()) @db.Timestamptz(6)
+  comment_scrape_logs comment_scrape_logs[]
+  projects            projects[]
+  scrape_sessions     scrape_sessions[]
+  user_scraped_posts  user_scraped_posts[]
+}
