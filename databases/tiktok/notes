@@ -1,0 +1,4 @@
+npm run dev
+
+for metigation 
+node -e "require('dotenv').config({path:'.env.local'}); require('dotenv').config(); const initDb = require('./init-db'); initDb().then(() => { console.log('Migration complete'); process.exit(0); }).catch(e => { console.error('Migration failed:', e.message); process.exit(1); });"

@@ -1,0 +1,11 @@
+{
+  "logs": [
+    "Connecting to Railway Database...",
+    "Connected successfully.",
+    "Reading SQL from: E:\\codinnnn\\Develeopment_Extensions\\insta_surfer_cloudproject\\migrate_projects.sql",
+    "Migration failed: ENOENT: no such file or directory, open 'E:\\codinnnn\\Develeopment_Extensions\\insta_surfer_cloudproject\\migrate_projects.sql'",
+    "Connection closed."
+  ],
+  "error": "ENOENT: no such file or directory, open 'E:\\codinnnn\\Develeopment_Extensions\\insta_surfer_cloudproject\\migrate_projects.sql'",
+  "verification": {}
+}
