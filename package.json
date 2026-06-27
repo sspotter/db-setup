@@ -4,6 +4,9 @@
   "private": true,
   "description": "Standalone, idempotent bootstrapper for the local PostgreSQL databases used by the tiksurfer and insta-surfer (prisma) backends.",
   "scripts": {
+    "dev": "concurrently -k -n tiktok,insta -c cyan,yellow \"npm:dev:tiktok\" \"npm:dev:insta\"",
+    "dev:tiktok": "npm run dev --prefix databases/tiktok",
+    "dev:insta": "npm run dev --prefix databases/instagram",
     "create": "node create-databases.js",
     "recreate": "node create-databases.js --force",
     "introspect": "npm run introspect:tiksurfer && npm run introspect:insta",
@@ -17,6 +20,7 @@
     "pg": "^8.11.5"
   },
   "devDependencies": {
+    "concurrently": "^10.0.3",
     "prisma": "^6.19.3"
   }
 }
