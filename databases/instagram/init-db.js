@@ -7,7 +7,7 @@ const path = require('path');
 const pool = require('./db');
 
 async function initDatabase() {
-    const schemaPath = path.join(__dirname, '..', 'schema.sql');
+    const schemaPath = path.join(__dirname, '..', 'insta-surferschema.sql');
 
     if (!fs.existsSync(schemaPath)) {
         console.error('[INIT] schema.sql not found at', schemaPath);
