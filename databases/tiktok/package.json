@@ -8,9 +8,13 @@
     "dev": "node --watch server.js",
     "db:init": "node building/create_db.js",
     "db:migrate": "node migrations/run_v3_migration.js",
+    "prisma:pull": "prisma db pull",
+    "prisma:generate": "prisma generate",
+    "prisma:studio": "prisma studio --port 5555",
     "test": "jest"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
@@ -21,6 +25,7 @@
   },
   "devDependencies": {
     "jest": "^29.7.0",
+    "prisma": "^6.19.3",
     "supertest": "^7.2.2"
   }
 }

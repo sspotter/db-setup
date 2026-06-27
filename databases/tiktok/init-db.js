@@ -8,6 +8,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
+const { cleanSchema, isAlreadyAppliedError } = require('../clean-schema');
 
 async function initDatabase() {
     const localUrl = process.env.LOCAL_DATABASE_URL;
@@ -36,7 +37,7 @@ async function initDatabase() {
         process.exit(1);
     }
 
-    const sql = fs.readFileSync(schemaPath, 'utf-8');
+    const sql = cleanSchema(fs.readFileSync(schemaPath, 'utf-8'));
 
     // Step 1: Ensure the database exists by connecting to standard 'postgres' db
     if (dbName !== 'postgres') {
@@ -65,8 +66,12 @@ async function initDatabase() {
         await pool.query(sql);
         console.log('[INIT] Database schema initialized successfully.');
     } catch (err) {
-        console.error('[INIT] Failed to initialize database schema:', err.message);
-        process.exit(1);
+        if (isAlreadyAppliedError(err.message)) {
+            console.log('[INIT] Schema already present — skipping (DB already initialized).');
+        } else {
+            console.error('[INIT] Failed to initialize database schema:', err.message);
+            process.exit(1);
+        }
     }
 }
 
