@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict 6rEjAoEsSw64kZ8vZanPq4hYFnpXZeoNCSN3gFB6u8TVh4CskhcOR8WyXLLY4ro
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -701,5 +700,4 @@ ALTER TABLE ONLY public.user_scraped_posts
 -- PostgreSQL database dump complete
 --
 
-\unrestrict 6rEjAoEsSw64kZ8vZanPq4hYFnpXZeoNCSN3gFB6u8TVh4CskhcOR8WyXLLY4ro
 
