@@ -9,6 +9,7 @@ router.get('/health', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW() AS server_time');
         res.json({
+            "Platform": "Instagram",
             status: 'ok',
             database: 'connected',
             serverTime: result.rows[0].server_time,
