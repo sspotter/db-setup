@@ -19,7 +19,7 @@ if [ ! -f .env ]; then
     read -p "Enter your Remote PostgreSQL URL (e.g., postgresql://user:pass@host:port/dbname): " db_url
     echo "DATABASE_URL=\"$db_url\"" > .env
     echo "LOCAL_DATABASE_URL=\"$db_url\"" >> .env
-    echo "PORT=3001" >> .env
+    echo "PORT=8442" >> .env
     echo "JWT_SECRET=\"$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")\"" >> .env
     echo ".env file created."
 else

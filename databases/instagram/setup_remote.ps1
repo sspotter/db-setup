@@ -18,7 +18,7 @@ if (!(Test-Path .env)) {
     
     "DATABASE_URL=`"$db_url`"" | Out-File -FilePath .env -Encoding utf8
     "LOCAL_DATABASE_URL=`"$db_url`"" | Out-File -FilePath .env -Encoding utf8 -Append
-    "PORT=3001" | Out-File -FilePath .env -Encoding utf8 -Append
+    "PORT=8442" | Out-File -FilePath .env -Encoding utf8 -Append
     "JWT_SECRET=`"$jwt_secret`"" | Out-File -FilePath .env -Encoding utf8 -Append
     
     Write-Host ".env file created."
