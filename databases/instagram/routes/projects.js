@@ -983,6 +983,7 @@ router.get('/projects/:id/collaborations', async (req, res) => {
                     ac.profile_username,
                     ac.collaborator_username,
                     COUNT(DISTINCT ac.shortcode) AS collab_count,
+                    array_agg(DISTINCT ac.shortcode) AS shortcodes,
                     COALESCE(iu.follower_count, 0) AS collaborator_followers
                 FROM all_collabs ac
                 LEFT JOIN ig_users iu ON ac.collaborator_username = iu.username
@@ -1002,6 +1003,7 @@ router.get('/projects/:id/collaborations', async (req, res) => {
                 type: 'COAUTHOR',
                 post_count: parseInt(row.collab_count),
                 followers: parseInt(row.collaborator_followers),
+                posts: row.shortcodes || [],   // shortcodes of the shared posts (for the 👁️ modal)
             });
         }
 

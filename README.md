@@ -95,3 +95,7 @@ the same source of truth used to create the databases.
 - **Mapping** → the `PROJECTS` array near the top of
   [`create-databases.js`](create-databases.js) ties each project to its env var,
   schema file, and any post-schema statements.
+
+
+
+![alt text](image.png)
