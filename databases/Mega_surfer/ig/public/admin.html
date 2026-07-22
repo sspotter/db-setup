@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Insta Surfer | Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+    <div class="background-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <!-- Login Overlay -->
+    <div id="login-overlay" class="modal-overlay">
+        <div class="modal-content glass-panel small-modal">
+            <div class="modal-header">
+                <h3>Admin Login</h3>
+            </div>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="admin-password">Enter Password</label>
+                    <input type="password" id="admin-password" required placeholder="••••••••">
+                </div>
+                <div id="login-error" class="error-message hidden"></div>
+                <div class="form-actions">
+                    <button type="submit" class="btn primary-btn submit-btn w-full">Sign In</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <main class="admin-container blurred">
+        <header class="glass-header">
+            <div class="header-left">
+                <div class="logo-icon"></div>
+                <h1>Insta Surfer <span>Admin</span></h1>
+            </div>
+            <button id="add-user-btn" class="btn primary-btn">+ Add User</button>
+        </header>
+
+        <section class="users-section glass-panel">
+            <div class="panel-header">
+                <h2>User Management</h2>
+                <div class="search-bar">
+                    <input type="text" id="search-users" placeholder="Search by email..." autocomplete="off">
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="users-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Plan</th>
+                            <th>Status</th>
+                            <th>Devices</th>
+                            <th>Last Login</th>
+                            <th>Created At</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody">
+                        <!-- Users will be injected here via JS -->
+                    </tbody>
+                </table>
+            </div>
+            <div id="loading" class="loading-spinner"></div>
+            <div id="error-message" class="error-message hidden"></div>
+        </section>
+    </main>
+
+    <!-- Add User Modal -->
+    <div id="add-user-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3>Add New User</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <form id="add-user-form">
+                <div class="form-group">
+                    <label for="email">Email Address</label>
+                    <input type="email" id="email" required autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group half">
+                        <label for="plan">Subscription Plan</label>
+                        <select id="plan">
+                            <option value="none">None (Free)</option>
+                            <option value="basic">Basic</option>
+                            <option value="pro">Pro</option>
+                            <option value="enterprise">Enterprise</option>
+                        </select>
+                    </div>
+                    <div class="form-group half">
+                        <label for="status">Account Status</label>
+                        <select id="status">
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                            <option value="suspended">Suspended</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="max-devices">Max Devices</label>
+                    <input type="number" id="max-devices" value="3" min="1" max="100">
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
+                    <button type="submit" class="btn primary-btn submit-btn">Create User</button>
+                </div>
+                <div id="form-error" class="error-message hidden"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete Confirm Modal -->
+    <div id="delete-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel small-modal">
+            <div class="modal-header">
+                <h3>Confirm Deletion</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete <strong id="delete-user-email"></strong>?</p>
+                <p class="warning-text">This action cannot be undone and will revoke all access immediately.</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
+                <button type="button" id="confirm-delete-btn" class="btn danger-btn">Delete User</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Force Logout Confirm Modal -->
+    <div id="logout-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel small-modal">
+            <div class="modal-header">
+                <h3>Confirm Force Logout</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to force logout <strong id="logout-user-email"></strong> from all devices?</p>
+                <p class="warning-text">They will be signed out everywhere.</p>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
+                <button type="button" id="confirm-logout-btn" class="btn primary-btn">Force Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="admin.js"></script>
+</body>
+</html>
