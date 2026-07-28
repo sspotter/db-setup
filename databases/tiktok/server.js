@@ -4,6 +4,8 @@
 require('dotenv').config({ path: '.env.local' });
 require('dotenv').config();
 
+const os = require('os');
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const initDatabase = require('./init-db');
@@ -55,17 +57,42 @@ if (require.main === module) {
     async function start() {
         await initDatabase();
 
-        // Bind to loopback by default: tailscaled funnel owns the tailnet IP
-        // :8443 and proxies to localhost:8443. Binding the wildcard (0.0.0.0)
-        // would collide with that listener (EADDRINUSE), so we listen on
-        // 127.0.0.1 — reachable by the funnel proxy and local health checks.
-        // Override with HOST=<addr> only if you know it won't clash with 8443.
-        const HOST = process.env.HOST || '127.0.0.1';
-        app.listen(PORT, HOST, () => {
-            const isLocal = !!process.env.LOCAL_DATABASE_URL;
-            console.log(`[SERVER] Tik Surfer backend running on http://${HOST}:${PORT}`);
-            console.log(`[SERVER] Detected Environment: ${isLocal ? 'LOCAL' : 'CLOUD'}`);
-        });
+        // Bind explicitly to loopback + every non-Tailscale IPv4 interface.
+        //
+        // We can't use the wildcard (0.0.0.0): tailscaled runs the Funnel
+        // listener on the tailnet IP :8443 (100.x), so a wildcard bind collides
+        // with it (EADDRINUSE) and the service crash-loops. Binding specific
+        // addresses lets us serve both access paths at once:
+        //   - 127.0.0.1   -> the Tailscale Funnel proxy (it dials localhost:8443)
+        //   - 192.168.1.3 -> the LAN IP that *.medpushmena.com subdomains resolve to
+        // while leaving 100.115.149.3:8443 to tailscaled.
+        //
+        // Set HOST="a,b,c" to override the auto-detected list.
+        const inTailscaleRange = (addr) => {
+            const [a, b] = addr.split('.').map(Number);   // Tailscale CGNAT 100.64.0.0/10
+            return a === 100 && b >= 64 && b <= 127;
+        };
+        const hosts = process.env.HOST
+            ? process.env.HOST.split(',').map((s) => s.trim()).filter(Boolean)
+            : ['127.0.0.1', ...Object.values(os.networkInterfaces()).flat()
+                .filter((ni) => ni.family === 'IPv4' && !ni.internal && !inTailscaleRange(ni.address))
+                .map((ni) => ni.address)];
+
+        const isLocal = !!process.env.LOCAL_DATABASE_URL;
+        console.log(`[SERVER] Detected Environment: ${isLocal ? 'LOCAL' : 'CLOUD'}`);
+
+        // One listener per address. An error handler keeps a single failed bind
+        // from throwing an unhandled 'error' event and taking the process down —
+        // the other addresses (notably loopback for the Funnel) stay up.
+        for (const host of [...new Set(hosts)]) {
+            const server = http.createServer(app);
+            server.on('error', (err) => {
+                console.error(`[SERVER] could not bind ${host}:${PORT} — ${err.code || err.message}`);
+            });
+            server.listen(PORT, host, () => {
+                console.log(`[SERVER] Tik Surfer backend listening on http://${host}:${PORT}`);
+            });
+        }
     }
 
     start();
