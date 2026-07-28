@@ -8,18 +8,18 @@ const pool = require('../db');
 router.get('/health', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW() AS server_time');
-        res.json({
+        res.type('json').send(JSON.stringify({
             "Platform": "Instagram",
             status: 'ok',
             database: 'connected',
             serverTime: result.rows[0].server_time,
-        });
+        }) + '\n');
     } catch (err) {
-        res.status(500).json({
+        res.status(500).type('json').send(JSON.stringify({
             status: 'error',
             database: 'disconnected',
             error: err.message,
-        });
+        }) + '\n');
     }
 });
 
