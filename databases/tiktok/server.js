@@ -55,9 +55,15 @@ if (require.main === module) {
     async function start() {
         await initDatabase();
 
-        app.listen(PORT, () => {
+        // Bind to loopback by default: tailscaled funnel owns the tailnet IP
+        // :8443 and proxies to localhost:8443. Binding the wildcard (0.0.0.0)
+        // would collide with that listener (EADDRINUSE), so we listen on
+        // 127.0.0.1 — reachable by the funnel proxy and local health checks.
+        // Override with HOST=<addr> only if you know it won't clash with 8443.
+        const HOST = process.env.HOST || '127.0.0.1';
+        app.listen(PORT, HOST, () => {
             const isLocal = !!process.env.LOCAL_DATABASE_URL;
-            console.log(`[SERVER] Tik Surfer backend running on http://localhost:${PORT}`);
+            console.log(`[SERVER] Tik Surfer backend running on http://${HOST}:${PORT}`);
             console.log(`[SERVER] Detected Environment: ${isLocal ? 'LOCAL' : 'CLOUD'}`);
         });
     }
