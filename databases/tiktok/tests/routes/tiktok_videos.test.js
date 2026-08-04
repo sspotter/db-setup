@@ -9,6 +9,10 @@ jest.mock('../../db', () => ({
     connect: jest.fn(),
     end: jest.fn()
 }));
+jest.mock('../../utils/videoSync', () => ({
+    syncHiddenAcrossTables: jest.fn().mockResolvedValue(undefined)
+}));
+const { syncHiddenAcrossTables } = require('../../utils/videoSync');
 
 const app = express();
 app.use(express.json());
@@ -140,6 +144,27 @@ describe('tiktok_videos — ownership enforcement (IDOR regression)', () => {
             expect(res.status).toBe(400);
             expect(pool.query).not.toHaveBeenCalled();
         });
+
+        it('syncs the hide to posts when is_hidden is included in the update', async () => {
+            pool.query.mockResolvedValueOnce({ rows: [{ video_id: 'v1', keyword_id: 'k1' }] }); // UPDATE
+            pool.query.mockResolvedValueOnce({ rows: [] });                                     // stats refresh
+
+            const res = await request(app)
+                .patch('/api/tiktok/videos/v1/qualify')
+                .send({ is_hidden: true });
+
+            expect(res.status).toBe(200);
+            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true);
+        });
+
+        it('does not call the sync helper when is_hidden is not part of the update', async () => {
+            pool.query.mockResolvedValueOnce({ rows: [{ video_id: 'v1', keyword_id: 'k1' }] });
+            pool.query.mockResolvedValueOnce({ rows: [] });
+
+            await request(app).patch('/api/tiktok/videos/v1/qualify').send({ included_in_reach: true });
+
+            expect(syncHiddenAcrossTables).not.toHaveBeenCalled();
+        });
     });
 
     describe('GET /api/keywords/:id/analytics', () => {
@@ -177,6 +202,17 @@ describe('tiktok_videos — ownership enforcement (IDOR regression)', () => {
 
             expect(res.status).toBe(400);
             expect(pool.query).not.toHaveBeenCalled();
+        });
+
+        it('syncs a hide to posts after deleting', async () => {
+            pool.query.mockResolvedValueOnce({ rows: [{ id: 'k1', project_id: 'p1' }] }); // ownership ok
+            pool.query.mockResolvedValueOnce({ rows: [] }); // DELETE
+            pool.query.mockResolvedValueOnce({ rows: [] }); // stats refresh
+
+            const res = await request(app).delete('/api/tiktok/videos/v1?keyword_id=k1');
+
+            expect(res.status).toBe(200);
+            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true);
         });
     });
 });

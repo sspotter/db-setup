@@ -148,4 +148,18 @@ describe('Projects API Endpoints', () => {
             expect(res.body.profiles[0].username).toBe('target1');
         });
     });
+
+    describe('GET /api/projects/:id/posts — hidden/deleted filtering', () => {
+        it('excludes hidden and soft-deleted posts from the query', async () => {
+            pool.query.mockResolvedValueOnce({ rows: [{ id: 'p1' }] }); // ownership
+            pool.query.mockResolvedValueOnce({ rows: [] });             // posts query
+            pool.query.mockResolvedValueOnce({ rows: [{ count: '0' }] }); // count query
+
+            await request(app).get('/api/projects/p1/posts');
+
+            const postsCall = pool.query.mock.calls.find(c => c[0].includes('FROM posts p'));
+            expect(postsCall[0]).toMatch(/is_hidden = false OR p\.is_hidden IS NULL/);
+            expect(postsCall[0]).toMatch(/deleted_at IS NULL/);
+        });
+    });
 });

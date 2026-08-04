@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { checkProjectOwnership, checkKeywordOwnership, getOwnedKeyword } = require('../utils/ownership');
+const { syncHiddenAcrossTables } = require('../utils/videoSync');
 
 function normalizePostedAt(video) {
     if (video.posted_at) {
@@ -270,6 +271,10 @@ router.patch('/tiktok/videos/:video_id/qualify', async (req, res) => {
             return res.status(403).json({ success: false, error: 'Access denied' });
         }
 
+        if (is_hidden !== undefined) {
+            await syncHiddenAcrossTables(pool, video_id, req.user.id, is_hidden);
+        }
+
         // Refresh keyword stats for every keyword whose video set changed.
         const affectedKeywordIds = [...new Set(result.rows.map(r => r.keyword_id).filter(Boolean))];
         for (const keywordId of affectedKeywordIds) {
@@ -457,6 +462,8 @@ router.delete('/tiktok/videos/:video_id', async (req, res) => {
             `DELETE FROM tiktok_videos WHERE video_id = $1 AND keyword_id = $2`,
             [video_id, keyword_id]
         );
+
+        await syncHiddenAcrossTables(pool, video_id, req.user.id, true);
 
         // Update Keyword stats after deletion
         await pool.query(

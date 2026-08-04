@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { syncHiddenAcrossTables } = require('../utils/videoSync');
 
 /**
  * Upsert a row into ig_users keyed by username.
@@ -350,8 +351,8 @@ router.get('/posts', async (req, res) => {
             params.push(req.user.id);
         }
 
-        // Exclude hidden posts from standard listings (commentator/profiles)
-        query += ` AND (p.is_hidden = false OR p.is_hidden IS NULL)`;
+        // Exclude hidden and soft-deleted posts from standard listings (commentator/profiles)
+        query += ` AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
 
         if (owner) {
             query += ` AND p.owner_username = $${paramIdx++}`;
@@ -388,7 +389,7 @@ router.get('/posts', async (req, res) => {
             cIdx = 2;
         }
 
-        countQuery += ` AND (p.is_hidden = false OR p.is_hidden IS NULL)`;
+        countQuery += ` AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
 
         if (owner) { countQuery += ` AND p.owner_username = $${cIdx++}`; countParams.push(owner); }
         if (type) { countQuery += ` AND p.type = $${cIdx++}`; countParams.push(type); }
@@ -444,14 +445,25 @@ router.get('/posts/hidden', async (req, res) => {
  * PATCH /api/posts/:shortcode/hide
  * Body: { is_hidden?: boolean }  (defaults to true)
  * Hide/unhide a post from commentator/profile listings & calculations.
+ * Mirrors the state onto any owned tiktok_videos row with the same id
+ * (see utils/videoSync.js) so the Keywords/Hashtag view stays in sync.
+ *
+ * Unhiding (is_hidden: false) also clears deleted_at — this is the same
+ * "Unhide" button the Hidden Posts tab uses for both a plain hide and a
+ * soft-delete (DELETE /posts/:shortcode hides via this same is_hidden
+ * flag), so it must fully restore either kind or a soft-deleted post can
+ * never come back once hidden.
  */
 router.patch('/posts/:shortcode/hide', async (req, res) => {
+    const client = await pool.connect();
     try {
         const { shortcode } = req.params;
         const is_hidden = req.body?.is_hidden !== false; // default true
 
+        await client.query('BEGIN');
+
         // Verify the user owns this post via project or legacy user-scrape link
-        const own = await pool.query(
+        const own = await client.query(
             `SELECT 1 FROM posts p
              LEFT JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
              LEFT JOIN projects proj ON ppo.project_id = proj.id
@@ -460,19 +472,78 @@ router.patch('/posts/:shortcode/hide', async (req, res) => {
              LIMIT 1`,
             [shortcode, req.user.id]
         );
-        if (own.rows.length === 0) return res.status(404).json({ success: false, error: 'Post not found' });
+        if (own.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, error: 'Post not found' });
+        }
 
-        await pool.query(
+        await client.query(
             `UPDATE posts
              SET is_hidden = $2,
-                 hidden_at = CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END
+                 hidden_at = CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END,
+                 deleted_at = CASE WHEN $2 THEN deleted_at ELSE NULL END
              WHERE shortcode = $1`,
             [shortcode, is_hidden]
         );
+
+        await syncHiddenAcrossTables(client, shortcode, req.user.id, is_hidden);
+
+        await client.query('COMMIT');
         res.json({ success: true, shortcode, is_hidden });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error('[POSTS HIDE] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+/**
+ * DELETE /api/posts/:shortcode
+ * Soft-deletes a post (sets deleted_at) — recoverable, not a hard DELETE,
+ * because a hard delete here would also destroy post_metrics_history and
+ * post_relations rows that GET history/relations endpoints still read.
+ * Mirrors a HIDE (not a delete) onto any owned tiktok_videos row with the
+ * same id, so the video disappears from that view too without destroying
+ * data that view still owns.
+ */
+router.delete('/posts/:shortcode', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const { shortcode } = req.params;
+
+        await client.query('BEGIN');
+
+        const own = await client.query(
+            `SELECT 1 FROM posts p
+             LEFT JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
+             LEFT JOIN projects proj ON ppo.project_id = proj.id
+             LEFT JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode
+             WHERE p.shortcode = $1 AND (proj.user_id = $2 OR up.user_id = $2)
+             LIMIT 1`,
+            [shortcode, req.user.id]
+        );
+        if (own.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ success: false, error: 'Post not found' });
+        }
+
+        await client.query(
+            `UPDATE posts SET deleted_at = CURRENT_TIMESTAMP WHERE shortcode = $1`,
+            [shortcode]
+        );
+
+        await syncHiddenAcrossTables(client, shortcode, req.user.id, true);
+
+        await client.query('COMMIT');
+        res.json({ success: true, shortcode });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('[POSTS DELETE] Error:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    } finally {
+        client.release();
     }
 });
 
