@@ -1,0 +1,18 @@
+{
+  "version": "2.8.1",
+  "message": "Improved AI sentiment analysis and performance fixessdsd 🚀",
+  "url": "https://instasurf-website.vercel.app/",
+  "type": "major",
+  "features": {
+    "scraperEnabled": false,
+    "tabs": {
+        "tab-viewer": true,
+        "tab-commentator": false,
+        "tab-projects": false,
+        "tab-project2": false,
+        "tab-capture-log": false,
+        "tab-settings": true,
+        "tab-about": true
+    }
+  }
+}

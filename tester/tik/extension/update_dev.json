@@ -1,0 +1,42 @@
+{
+  "version": "2.5.8",
+  "message": "Fixing project id & working without creating a project 🚀",
+  "url": "https://instasurf-website.vercel.app/",
+  "type": "major",
+
+  
+  "global": {
+    "enabled": true,
+    "maintenanceMode": false
+  },
+
+  "features": {
+    "scraperEnabled": true,
+    "comp_renderSelectorBar": true,
+    "comp_renderKPIs": true,
+    "comp_renderCollaborations": true,
+    "comp_renderEngagementComparison": true,
+    "comp_renderCharts": true,
+    "comp_renderReachBreakdown": true,
+    "comp_renderTopPosts": true,
+    "comp_renderExportData": true,
+    "comp_renderDetailedBreakdown": true
+  },
+
+  "ui": {
+    "tabs": {
+        "tab-viewer": true,
+        "tab-commentator": true,
+        "tab-projects": true,
+        "tab-project2": true,
+        "tab-capture-log": true,
+        "tab-settings": true,
+        "tab-about": true
+    },
+    "buttons": {
+        "showSignup": true,
+        "showLogin": true,
+        "showUpgrade": true
+    }
+  }
+}

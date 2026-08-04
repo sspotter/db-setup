@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Insta Surfer - Concept 4 Preview</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #0d0d0f; /* Match sidebar background */
+            font-family: 'Inter', sans-serif;
+        }
+        .container {
+            text-align: center;
+        }
+        .logo-preview {
+            width: 512px;
+            height: 512px;
+            margin-bottom: 20px;
+            filter: drop-shadow(0 20px 50px rgba(0,0,0,0.5));
+        }
+        h1 {
+            color: white;
+            font-size: 24px;
+            margin: 0;
+            letter-spacing: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo-preview">
+            <svg width="512" height="512" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="instaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#833ab4;stop-opacity:1" />
+                        <stop offset="50%" style="stop-color:#fd1d1d;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#fcb045;stop-opacity:1" />
+                    </linearGradient>
+                </defs>
+                
+                <!-- Outer matrix shards (low opacity) -->
+                <path d="M50 5 L95 50 L50 95 L5 50 Z" fill="url(#instaGrad)" fill-opacity="0.1" />
+                <path d="M50 15 L85 50 L50 85 L15 50 Z" fill="url(#instaGrad)" fill-opacity="0.2" />
+                
+                <!-- Main Board Shape -->
+                <path d="M50 25 L75 50 L50 75 L25 50 Z" fill="url(#instaGrad)" />
+                <path d="M50 35 L65 50 L50 65 L35 50 Z" fill="white" />
+                
+                <!-- Digital Accents / Node Points -->
+                <circle cx="50" cy="15" r="2.5" fill="white" fill-opacity="0.8" />
+                <circle cx="50" cy="85" r="2.5" fill="white" fill-opacity="0.8" />
+                <circle cx="85" cy="50" r="2.5" fill="white" fill-opacity="0.8" />
+                <circle cx="15" cy="50" r="2.5" fill="white" fill-opacity="0.8" />
+                
+                <!-- Corner Shards -->
+                <circle cx="32" cy="32" r="1.5" fill="url(#instaGrad)" />
+                <circle cx="68" cy="32" r="1.5" fill="url(#instaGrad)" />
+                <circle cx="32" cy="68" r="1.5" fill="url(#instaGrad)" />
+                <circle cx="68" cy="68" r="1.5" fill="url(#instaGrad)" />
+            </svg>
+        </div>
+        <h1>INSTA SURFER</h1>
+    </div>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Insta Surfer</title>
+    <link rel="stylesheet" href="popup.css">
+    <link rel="icon" type="image/png" href="favicon.png">
+</head>
+<body>
+    <div class="popup-container ">
+
+        <!-- Loading View — visible immediately on open, before any JS runs.
+             login-view/signup-view/main-view all start display:none, so
+             without this the popup paints as a blank box until checkAuth()'s
+             network round trip resolves. -->
+        <div id="loading-view" class="loading-view">
+            <img src="icons/icon32.png" alt="Icon" class="logo-icon">
+            <div class="popup-spinner"></div>
+            <span class="loading-text">Loading…</span>
+        </div>
+
+        <!-- Login View -->
+        <div id="login-view" style="display: none; padding: 20px;">
+            <div class="logo-row" style="justify-content: center; margin-bottom: 20px;">
+                <img src="icons/icon32.png" alt="Icon" class="logo-icon">
+                <h1 class="logo-text">Insta Surfer</h1>
+            </div>
+            <h2 style="font-size: 14px; text-align: center; margin-bottom: 16px;">Login to Your Account</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div>
+                    <label style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px; display: block;">Email</label>
+                    <input type="email" id="login-email" class="form-input" placeholder="Enter email" style="width: 100%;" />
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px; display: block;">Password</label>
+                    <input type="password" id="login-password" class="form-input" placeholder="Enter password" style="width: 100%;" />
+                </div>
+                <details class="backend-config" style="margin-top: 4px; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 10px;">
+                    <summary style="font-size: 12px; color: #a1a1aa; cursor: pointer; list-style: none;">⚙️ Backend Server (advanced)</summary>
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                        <div style="display: flex; gap: 6px; align-items: stretch;">
+                            <input type="text" id="login-api-url" class="form-input" placeholder="https://your-backend.example.com" style="flex: 1; min-width: 0;" />
+                            <button id="btn-test-backend-login" type="button" class="btn btn-ghost btn-sm" style="border: 1px solid rgba(255,255,255,0.1); white-space: nowrap;">Test</button>
+                        </div>
+                        <div id="backend-status-login" style="font-size: 11px; text-align: center; display: none;"></div>
+                    </div>
+                </details>
+                <button id="btn-login" class="btn btn-primary" style="margin-top: 8px;">Login</button>
+                <div id="login-error" style="color: #ef4444; font-size: 12px; text-align: center; display: none;"></div>
+                <p style="font-size: 12px; color: #71717a; text-align: center; margin-top: 4px;">
+                    Don't have an account? <a href="#" id="link-show-signup" style="color: #818cf8; text-decoration: none; font-weight: 600;">Sign Up</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Signup View -->
+        <div id="signup-view" style="display: none; padding: 20px;">
+            <div class="logo-row" style="justify-content: center; margin-bottom: 20px;">
+                <img src="icons/icon32.png" alt="Icon" class="logo-icon">
+                <h1 class="logo-text">Insta_Surfer</h1>
+            </div>
+            <h2 style="font-size: 14px; text-align: center; margin-bottom: 16px;">Create Your Account</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div>
+                    <label style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px; display: block;">Email</label>
+                    <input type="email" id="signup-email" class="form-input" placeholder="Enter email" style="width: 100%;" />
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px; display: block;">Password</label>
+                    <input type="password" id="signup-password" class="form-input" placeholder="Create password" style="width: 100%;" />
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #a1a1aa; margin-bottom: 4px; display: block;">Confirm Password</label>
+                    <input type="password" id="signup-confirm-password" class="form-input" placeholder="Confirm password" style="width: 100%;" />
+                </div>
+                <details class="backend-config" style="margin-top: 4px; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 10px;">
+                    <summary style="font-size: 12px; color: #a1a1aa; cursor: pointer; list-style: none;">⚙️ Backend Server (advanced)</summary>
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                        <div style="display: flex; gap: 6px; align-items: stretch;">
+                            <input type="text" id="signup-api-url" class="form-input" placeholder="https://your-backend.example.com" style="flex: 1; min-width: 0;" />
+                            <button id="btn-test-backend-signup" type="button" class="btn btn-ghost btn-sm" style="border: 1px solid rgba(255,255,255,0.1); white-space: nowrap;">Test</button>
+                        </div>
+                        <div id="backend-status-signup" style="font-size: 11px; text-align: center; display: none;"></div>
+                    </div>
+                </details>
+                <button id="btn-signup" class="btn btn-primary" style="margin-top: 8px;">Sign Up</button>
+                <div id="signup-error" style="color: #ef4444; font-size: 12px; text-align: center; display: none;"></div>
+                <div id="signup-success" style="color: #22c55e; font-size: 12px; text-align: center; display: none;"></div>
+                <p style="font-size: 12px; color: #71717a; text-align: center; margin-top: 4px;">
+                    Already have an account? <a href="#" id="link-show-login" style="color: #818cf8; text-decoration: none; font-weight: 600;">Login</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Main View -->
+        <div id="main-view" style="display: none;">
+            <!-- Header -->
+            <header class="popup-header">
+            <div class="logo-row">
+                <img src="icons/icon32.png" alt="Icon" class="logo-icon">
+                <h1 class="logo-text">Insta Surfer</h1>
+            </div>
+            <span id="version-badge-display" class="version-badge">v1.0</span>
+        </header>
+
+        <!-- Project Selector -->
+        <section class="project-section" style="padding: 8px 16px; border-bottom: 1px solid #3f3f46;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 11px; color: #a1a1aa; white-space: nowrap;">Project:</span>
+                <select id="project-select" style="flex: 1; padding: 6px 8px; border-radius: 8px; background: rgba(14, 0, 33, 0.83); border: 1px solid rgba(255,255,255,0.1); color: #fff; font-size: 12px; cursor: pointer; appearance: auto;">
+                    <option value="" disabled selected>Loading...</option>
+                </select>
+                <button id="btn-new-project" title="New Project" style="padding: 4px 8px; border-radius: 8px; background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.3); color: #818cf8; font-size: 14px; cursor: pointer; line-height: 1;">+</button>
+                <button id="btn-delete-project" title="Delete Project" style="padding: 4px 8px; border-radius: 8px; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2); color: #f87171; font-size: 12px; cursor: pointer; line-height: 1;">🗑</button>
+            </div>
+        </section>
+
+        <!-- Create Project Modal -->
+        <div id="project-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; padding: 20px; display: none;">
+            <div style="background: #1e1e2e; border-radius: 16px; padding: 20px; max-width: 350px; margin: 40px auto; border: 1px solid #3f3f46;">
+                <h3 style="margin: 0 0 16px; font-size: 14px; color: #fff;">📁 Create New Project</h3>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <input type="text" id="new-project-name" placeholder="Project name (e.g. Heineken Campaign)" class="form-input" style="width: 100%;" />
+                    <input type="text" id="new-project-desc" placeholder="Description (optional)" class="form-input" style="width: 100%;" />
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-create-project" class="btn btn-primary" style="flex: 1;">Create</button>
+                        <button id="btn-cancel-project" class="btn btn-ghost" style="flex: 1; border: 1px solid rgba(255,255,255,0.1);">Cancel</button>
+                    </div>
+                    <div id="project-error" style="color: #ef4444; font-size: 12px; text-align: center; display: none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Section -->
+        <section class="status-section">
+            <div class="status-row">
+                <span class="status-label">Platform</span>
+                <div class="status-value">
+                    <span id="status-indicator" class="status-dot"></span>
+                    <span id="platform-text">Detecting...</span>
+                </div>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Login</span>
+                <div class="status-value">
+                    <span id="login-indicator" class="status-dot"></span>
+                    <span id="login-text">Checking...</span>
+                </div>
+            </div>
+            <div class="status-row" id="username-row" style="display: none;">
+                <span class="status-label">Profile</span>
+                <div class="status-value">
+                    <span class="status-icon">👤</span>
+                    <span id="username-text">—</span>
+                </div>
+            </div>
+            
+            <div id="profile-stats-container" style="display: none; padding-top: 8px; margin-top: 8px; border-top: 1px solid #3f3f46; font-size: 11px; color: #a1a1aa;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Followers:</span>
+                    <span id="profile-followers" style="color: #fff; font-weight: 500;">0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Following:</span>
+                    <span id="profile-following" style="color: #fff; font-weight: 500;">0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Posts:</span>
+                    <span id="profile-media" style="color: #fff; font-weight: 500;">0</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>Last Post:</span>
+                    <span id="profile-last-post" style="color: #fff; font-weight: 500;">—</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; padding: 2px 0;" id="toggle-oldest-posts">
+                    <span style="display: flex; align-items: center; gap: 4px;">Oldest Captured <span style="font-size: 8px;">▼</span></span>
+                    <span id="profile-oldest-captured" style="color: #fff; font-weight: 500;">—</span>
+                </div>
+                <div id="oldest-posts-list" style="display: none; flex-direction: column; gap: 4px; margin-top: 4px; background: rgba(0,0,0,0.15); padding: 8px; border-radius: 8px;">
+                    <!-- JS will populate up to 5 oldest posts here -->
+                </div>
+            </div>
+            <button id="btn-refresh-status" class="btn btn-ghost btn-sm" style="width: 100%; margin-top: 6px;">
+                <span class="btn-icon">🔄</span>
+                Refresh Connection
+            </button>
+        </section>
+
+        <!-- Capture Controls -->
+        <section class="capture-section">
+            <div class="capture-header">
+                <h2 class="section-title">Insta Capture</h2>
+                <span id="capture-badge" class="capture-badge off">OFF</span>
+            </div>
+            
+            <div class="capture-controls">
+                <button id="btn-start" class="btn btn-primary" disabled>
+                    <span class="btn-icon">▶</span>
+                    Start Capture
+                </button>
+                <button id="btn-capture-comments" class="btn btn-amber" disabled style="display: flex;">
+                    <span class="btn-icon">💬</span>
+                    Capture Comments
+                </button>
+                <button id="btn-stop" class="btn btn-danger" style="display: none;">
+                    <span class="btn-icon">■</span>
+                    Stop Capture
+                </button>
+            </div>
+        </section>
+
+        <!-- Auto Scroll -->
+        <section class="capture-section">
+            <div class="capture-header">
+                <h2 class="section-title">Auto Scroll</h2>
+                <span id="autoscroll-badge" class="autoscroll-badge off">OFF</span>
+            </div>
+            <div class="capture-controls">
+                <button id="btn-autoscroll-toggle" class="btn btn-autoscroll-off" title="Repeatedly scrolls the Instagram tab to the bottom, like holding End, until clicked again">
+                    <span class="btn-icon">⤓</span>
+                    <span id="btn-autoscroll-label">Start Auto Scroll</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Stats Section -->
+        <section class="stats-section">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-value" id="stat-profiles">0</span>
+                    <span class="stat-label">Profiles</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-value" id="stat-posts">0</span>
+                    <span class="stat-label">Posts</span>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-queries">0</div>
+                    <div class="stat-label">Queries Processed</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Previews -->
+        <div id="preview-section" style="display: none;">
+            <div class="preview-header">
+                <h3>Recent Captures</h3>
+                <button class="btn-toggle" id="btn-toggle-preview">Show</button>
+            </div>
+            <div id="preview-list" class="preview-list" style="display: none;">
+                <!-- Rendered by JS -->
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="action-grid">
+            <button class="btn btn-amber" id="btn-export" disabled>
+                <span class="btn-icon">📥</span> Export JSON
+            </button>
+            <button class="btn btn-primary" id="btn-save-db" disabled>
+                <span class="btn-icon">💾</span> Save to DB
+            </button>
+            <button class="btn btn-danger" id="btn-clear" disabled>
+                <span class="btn-icon">🗑️</span> Clear All
+            </button>
+            <button class="btn btn-ghost" id="btn-logout" style="border: 1px solid rgba(255, 255, 255, 0.05);">
+                <span class="btn-icon">🚪</span> Logout
+            </button>
+        </div>
+        
+        <!-- Advanced Settings -->
+        <section class="advanced-section" style="padding: 0 16px 16px; display: flex; flex-direction: column; gap: 8px;">
+            <button id="btn-options" class="btn btn-primary" style="width: 100%; border-radius: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: #fff;">
+                <span class="btn-icon">⚙️</span>
+                Open Dataset Viewer
+            </button>
+            <button id="btn-toggle-onpage-counter" class="btn btn-ghost" style="width: 100%; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1); color: #fff; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                <span id="onpage-counter-dot" class="btn-icon" style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+                <span id="onpage-counter-label">Showing on page</span>
+            </button>
+        </section>
+
+        <!-- Footer -->
+        <footer class="popup-footer">
+            <span id="footer-text" class="footer-text">Scroll Instagram to capture posts</span>
+        </footer>
+        </div> <!-- End Main View -->
+    </div>
+
+    <script src="config.js"></script>
+    <script src="popup.js"></script>
+    <script src="update-module/banner.js"></script>
+</body>
+</html>
