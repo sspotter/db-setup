@@ -433,8 +433,8 @@ router.get('/projects/:id/posts', async (req, res) => {
 
         let query = `
             SELECT p.*,
-                   (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at))
-                    FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
+                   (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at, 'observed', h.observed_at))
+                    FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY observed_at DESC NULLS LAST, captured_at DESC LIMIT 1) h
                    ) AS latest_metrics
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
@@ -627,8 +627,8 @@ router.get('/projects/:id/compare', async (req, res) => {
                 SELECT
                     p.shortcode,
                     a.username AS target_username,
-                    COALESCE((SELECT h.likes_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1), 0) AS likes,
-                    COALESCE((SELECT h.comments_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1), 0) AS comments,
+                    COALESCE((SELECT h.likes_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.observed_at DESC NULLS LAST, h.captured_at DESC LIMIT 1), 0) AS likes,
+                    COALESCE((SELECT h.comments_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.observed_at DESC NULLS LAST, h.captured_at DESC LIMIT 1), 0) AS comments,
                     p.posted_at
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
@@ -775,8 +775,8 @@ router.get('/projects/:id/timeseries', async (req, res) => {
                 date_trunc($3, p.posted_at) AS period,
                 a.username AS username,
                 COUNT(DISTINCT p.shortcode) AS post_count,
-                COALESCE(SUM((SELECT h.likes_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1)), 0) AS total_likes,
-                COALESCE(SUM((SELECT h.comments_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1)), 0) AS total_comments
+                COALESCE(SUM((SELECT h.likes_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.observed_at DESC NULLS LAST, h.captured_at DESC LIMIT 1)), 0) AS total_likes,
+                COALESCE(SUM((SELECT h.comments_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.observed_at DESC NULLS LAST, h.captured_at DESC LIMIT 1)), 0) AS total_comments
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
             JOIN all_appearances a ON p.shortcode = a.shortcode
@@ -882,7 +882,7 @@ router.get('/projects/:id/top-posts', async (req, res) => {
                 SELECT likes_count, comments_count
                 FROM post_metrics_history
                 WHERE post_shortcode = p.shortcode
-                ORDER BY captured_at DESC LIMIT 1
+                ORDER BY observed_at DESC NULLS LAST, captured_at DESC LIMIT 1
             ) h ON true
             WHERE ppo.project_id = $1
               AND a.username = ANY($2)
@@ -983,10 +983,12 @@ router.get('/projects/:id/collaborations', async (req, res) => {
                     ac.profile_username,
                     ac.collaborator_username,
                     COUNT(DISTINCT ac.shortcode) AS collab_count,
-                    array_agg(DISTINCT ac.shortcode) AS shortcodes,
+                    -- shared posts as {shortcode, image_url} so the 👁️ modal can render thumbnails
+                    jsonb_agg(DISTINCT jsonb_build_object('shortcode', ac.shortcode, 'image_url', pi.image_url)) AS posts,
                     COALESCE(iu.follower_count, 0) AS collaborator_followers
                 FROM all_collabs ac
                 LEFT JOIN ig_users iu ON ac.collaborator_username = iu.username
+                LEFT JOIN posts pi ON pi.shortcode = ac.shortcode
                 GROUP BY ac.profile_username, ac.collaborator_username, iu.follower_count
             )
             SELECT * FROM aggregated
@@ -1003,7 +1005,7 @@ router.get('/projects/:id/collaborations', async (req, res) => {
                 type: 'COAUTHOR',
                 post_count: parseInt(row.collab_count),
                 followers: parseInt(row.collaborator_followers),
-                posts: row.shortcodes || [],   // shortcodes of the shared posts (for the 👁️ modal)
+                posts: row.posts || [],   // [{ shortcode, image_url }] of the shared posts (for the 👁️ modal)
             });
         }
 

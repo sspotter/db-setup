@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { toObservedAt, IG_USERS_FOLLOWERS_SET } = require('../observed');
 
 /**
  * POST /api/users
@@ -35,11 +36,11 @@ router.post('/users', async (req, res) => {
             const id = user.id || user.username;
 
             await pool.query(
-                `INSERT INTO ig_users (id, username, follower_count, following_count, media_count, biography, external_url, is_verified, role, scraped_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                `INSERT INTO ig_users (id, username, follower_count, following_count, media_count, biography, external_url, is_verified, role, scraped_at, observed_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10)
                  ON CONFLICT (username)
                  DO UPDATE SET
-                     follower_count = GREATEST(ig_users.follower_count, EXCLUDED.follower_count),
+                     ${IG_USERS_FOLLOWERS_SET},
                      following_count = EXCLUDED.following_count,
                      media_count = EXCLUDED.media_count,
                      biography = EXCLUDED.biography,
@@ -53,13 +54,14 @@ router.post('/users', async (req, res) => {
                 [
                     id, 
                     user.username, 
-                    user.follower_count || 0,
+                    Number(user.follower_count) || 0,
                     user.following_count || 0,
                     user.media_count || 0,
                     user.biography || null,
                     user.external_url || null,
                     user.is_verified || false,
-                    user.role || 'reference'
+                    user.role || 'reference',
+                    toObservedAt(user.observedAt), // profile-page counts: newest observation wins
                 ]
             );
 

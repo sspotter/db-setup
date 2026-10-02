@@ -5,6 +5,12 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { toObservedAt, newer, bothUnknown, IG_USERS_FOLLOWERS_SET, LATEST_METRICS_ORDER } = require('../observed');
+
+// Any real Instagram reach is far below this; bigger values are the old
+// string-concatenation bug ("0" + "806440" + "1120") and must not be stored.
+// ponytail: fixed ceiling, raise if a 10B-reach post ever exists.
+const MAX_SANE_REACH = 1e10;
 
 /**
  * POST /api/posts
@@ -59,16 +65,18 @@ router.post('/posts', async (req, res) => {
             const ownerFollowers = post.owner?.follower_count || post.owner?.edge_followed_by?.count || post.followers || 0;
             const ownerVerified = post.owner?.is_verified || false;
             const ownerId = post.owner?.pk || post.owner?.id || ownerUsername || 'unknown';
+            // When these numbers were seen on Instagram (null for old clients / old local copies).
+            const observedAt = toObservedAt(post.observedAt);
 
             if (ownerUsername) {
                 await client.query(
-                    `INSERT INTO ig_users (id, username, follower_count, is_verified, role, scraped_at)
-                     VALUES ($1, $2, $3, $4, 'reference', NOW())
+                    `INSERT INTO ig_users (id, username, follower_count, is_verified, role, scraped_at, observed_at)
+                     VALUES ($1, $2, $3, $4, 'reference', NOW(), $5)
                      ON CONFLICT (username) DO UPDATE SET
-                         follower_count = GREATEST(ig_users.follower_count, EXCLUDED.follower_count),
+                         ${IG_USERS_FOLLOWERS_SET},
                          is_verified = COALESCE(EXCLUDED.is_verified, ig_users.is_verified),
                          scraped_at = NOW()`,
-                    [String(ownerId), ownerUsername, ownerFollowers, ownerVerified]
+                    [String(ownerId), ownerUsername, Number(ownerFollowers) || 0, ownerVerified, observedAt]
                 );
             }
 
@@ -84,22 +92,35 @@ router.post('/posts', async (req, res) => {
                 `INSERT INTO posts (
                     shortcode, owner_username, post_url, caption, image_url, video_url,
                     is_video, is_carousel, is_paid, classification, type,
-                    collective_reach, reach_breakdown, scraped_from_profile, is_reference, posted_at, first_captured_at, last_updated_at
+                    collective_reach, reach_breakdown, scraped_from_profile, is_reference, posted_at, first_captured_at, last_updated_at,
+                    observed_at
                  )
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW(), NOW())
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, NOW(), NOW(), $17)
                  ON CONFLICT (shortcode) DO UPDATE SET
                     caption = COALESCE(EXCLUDED.caption, posts.caption),
                     image_url = COALESCE(EXCLUDED.image_url, posts.image_url),
                     video_url = COALESCE(EXCLUDED.video_url, posts.video_url),
-                    is_paid = EXCLUDED.is_paid OR posts.is_paid,
+                    -- Newest observation wins; two unstamped copies keep the old sticky rule.
+                    is_paid = CASE
+                        WHEN ${newer('posts')} THEN EXCLUDED.is_paid
+                        WHEN ${bothUnknown('posts')} THEN EXCLUDED.is_paid OR posts.is_paid
+                        ELSE posts.is_paid
+                    END,
                     classification = EXCLUDED.classification,
                     type = EXCLUDED.type,
-                    collective_reach = GREATEST(posts.collective_reach, EXCLUDED.collective_reach),
+                    collective_reach = CASE
+                        WHEN ${newer('posts')} THEN EXCLUDED.collective_reach
+                        WHEN ${bothUnknown('posts')} THEN GREATEST(posts.collective_reach, EXCLUDED.collective_reach)
+                        ELSE posts.collective_reach
+                    END,
                     reach_breakdown = CASE
-                        WHEN jsonb_array_length(COALESCE(EXCLUDED.reach_breakdown, '[]'::jsonb)) > jsonb_array_length(COALESCE(posts.reach_breakdown, '[]'::jsonb))
+                        WHEN ${newer('posts')} THEN EXCLUDED.reach_breakdown
+                        WHEN ${bothUnknown('posts')}
+                         AND jsonb_array_length(COALESCE(EXCLUDED.reach_breakdown, '[]'::jsonb)) > jsonb_array_length(COALESCE(posts.reach_breakdown, '[]'::jsonb))
                         THEN EXCLUDED.reach_breakdown
                         ELSE COALESCE(posts.reach_breakdown, EXCLUDED.reach_breakdown)
                     END,
+                    observed_at = GREATEST(posts.observed_at, EXCLUDED.observed_at),
                     scraped_from_profile = COALESCE(EXCLUDED.scraped_from_profile, posts.scraped_from_profile),
                     is_reference = LEAST(posts.is_reference, EXCLUDED.is_reference),
                     last_updated_at = NOW()
@@ -116,11 +137,12 @@ router.post('/posts', async (req, res) => {
                     post.isPaid || false,
                     post.classification || 'Normal Post',
                     post.type || 'normal',
-                    post.collectiveReach || 0,
+                    (Number(post.collectiveReach) || 0) > MAX_SANE_REACH ? 0 : (Number(post.collectiveReach) || 0),
                     JSON.stringify(post.reachBreakdown || []),
                     post.scrapedFromProfile || null,
                     post.is_reference || false,
                     postedAt,
+                    observedAt,
                 ]
             );
 
@@ -133,12 +155,20 @@ router.post('/posts', async (req, res) => {
             // --- 3. Insert metrics snapshot ---
             const likesCount = post.likes ?? post.like_count ?? 0;
             const commentsCount = post.comments ?? post.comment_count ?? 0;
-            const viewCount = post.videoViewCount || post.video_view_count || 0;
+            // Captured posts carry `views` (background.js parser); the others are legacy names.
+            const viewCount = post.views || post.videoViewCount || post.video_view_count || 0;
 
+            // One row per observation: re-syncing the same capture adds nothing.
+            // Readers pick "latest" by observed_at, so an old copy synced today
+            // lands in history without becoming the current number.
             await client.query(
-                `INSERT INTO post_metrics_history (post_shortcode, likes_count, comments_count, video_view_count, captured_at)
-                 VALUES ($1, $2, $3, $4, NOW())`,
-                [post.shortcode, likesCount, commentsCount, viewCount]
+                `INSERT INTO post_metrics_history (post_shortcode, likes_count, comments_count, video_view_count, captured_at, observed_at)
+                 SELECT $1::varchar, $2::int, $3::int, $4::int, NOW(), $5::timestamptz
+                 WHERE $5::timestamptz IS NULL OR NOT EXISTS (
+                     SELECT 1 FROM post_metrics_history
+                     WHERE post_shortcode = $1::varchar AND observed_at = $5::timestamptz
+                 )`,
+                [post.shortcode, likesCount, commentsCount, viewCount, observedAt]
             );
 
             // --- 4. Upsert relations ---
@@ -177,13 +207,16 @@ router.post('/posts', async (req, res) => {
 
             for (const rel of relations) {
                 await client.query(
+                    // Not stamped with observedAt: coauthor follower counts are often
+                    // backfilled locally from older posts, so they never override a
+                    // count someone observed directly.
                     `INSERT INTO ig_users (id, username, follower_count, is_verified, role, scraped_at)
                      VALUES ($1, $2, $3, $4, 'reference', NOW())
                      ON CONFLICT (username) DO UPDATE SET
-                         follower_count = GREATEST(ig_users.follower_count, EXCLUDED.follower_count),
+                         ${IG_USERS_FOLLOWERS_SET},
                          is_verified = COALESCE(EXCLUDED.is_verified, ig_users.is_verified),
                          scraped_at = NOW()`,
-                    [String(rel.id), rel.username, rel.follower_count, rel.is_verified]
+                    [String(rel.id), rel.username, Number(rel.follower_count) || 0, rel.is_verified]
                 );
 
                 await client.query(
@@ -289,8 +322,8 @@ router.get('/posts', async (req, res) => {
             // Project-scoped query
             query = `
                 SELECT p.*,
-                       (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at))
-                        FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
+                       (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at, 'observed', h.observed_at))
+                        FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY ${LATEST_METRICS_ORDER()} LIMIT 1) h
                        ) AS latest_metrics
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
@@ -302,8 +335,8 @@ router.get('/posts', async (req, res) => {
             // Backward compat: user-scoped via user_scraped_posts
             query = `
                 SELECT p.*,
-                       (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at))
-                        FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
+                       (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'at', h.captured_at, 'observed', h.observed_at))
+                        FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY ${LATEST_METRICS_ORDER()} LIMIT 1) h
                        ) AS latest_metrics
                 FROM posts p
                 JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode
@@ -375,10 +408,11 @@ router.get('/posts/:shortcode/history', async (req, res) => {
         const { shortcode } = req.params;
 
         const result = await pool.query(
-            `SELECT likes_count, comments_count, video_view_count, captured_at
+            // Chronological by when Instagram showed the numbers, not when they were synced.
+            `SELECT likes_count, comments_count, video_view_count, captured_at, observed_at
              FROM post_metrics_history
              WHERE post_shortcode = $1
-             ORDER BY captured_at ASC`,
+             ORDER BY COALESCE(observed_at, captured_at) ASC`,
             [shortcode]
         );
 
