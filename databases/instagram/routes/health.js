@@ -12,6 +12,7 @@ router.get('/health', async (req, res) => {
             status: 'ok',
             database: 'connected',
             serverTime: result.rows[0].server_time,
+            VersionNumber: '8.2.1',
         });
     } catch (err) {
         res.status(500).json({

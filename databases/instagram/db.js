@@ -1,7 +1,11 @@
 /**
  * PostgreSQL connection pool
  */
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Return bigint (int8) as a number, not a string — follower counts and reach
+// fit well inside 2^53, and strings made the client concatenate instead of add.
+types.setTypeParser(20, Number);
 
 const localUrl = process.env.LOCAL_DATABASE_URL;
 const cloudUrl = process.env.RAILWAY_DATABASE_URL || process.env.DATABASE_URL;

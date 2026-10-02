@@ -74,7 +74,8 @@ CREATE TABLE public.ig_users (
     business_category character varying(255),
     is_verified boolean DEFAULT false,
     role character varying(50) DEFAULT 'reference'::character varying,
-    scraped_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    scraped_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    observed_at timestamp with time zone
 );
 
 
@@ -90,7 +91,8 @@ CREATE TABLE public.post_metrics_history (
     likes_count integer DEFAULT 0,
     comments_count integer DEFAULT 0,
     video_view_count integer DEFAULT 0,
-    captured_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    captured_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    observed_at timestamp with time zone
 );
 
 
@@ -132,7 +134,8 @@ CREATE TABLE public.posts (
     is_reference boolean DEFAULT false,
     posted_at timestamp with time zone,
     first_captured_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    last_updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    last_updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    observed_at timestamp with time zone
 );
 
 
@@ -703,3 +706,17 @@ ALTER TABLE ONLY public.user_scraped_posts
 
 \unrestrict 6rEjAoEsSw64kZ8vZanPq4hYFnpXZeoNCSN3gFB6u8TVh4CskhcOR8WyXLLY4ro
 
+
+
+--
+-- Name: idx_pmh_shortcode_observed; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_pmh_shortcode_observed ON public.post_metrics_history USING btree (post_shortcode, observed_at DESC NULLS LAST, captured_at DESC);
+
+
+--
+-- Name: uq_pmh_shortcode_observed; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE UNIQUE INDEX uq_pmh_shortcode_observed ON public.post_metrics_history USING btree (post_shortcode, observed_at) WHERE (observed_at IS NOT NULL);
