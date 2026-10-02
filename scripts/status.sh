@@ -6,44 +6,35 @@
 #
 #   ./status.sh
 #
-# Add a row by appending "unit|port|kind|public-base" to SERVICES below.
-#   kind        = api    -> curl /api/health, local URL ends in /api
-#               = studio -> just check the port is reachable
-#   public-base = full https Funnel base (e.g. https://host:8443), or empty
-#                 if the service is NOT exposed to the public internet.
+# The service list lives in services.conf — add a row there, not here.
 #
 set -uo pipefail
 
-HOST_IP="100.115.149.3"
-FUNNEL_HOST="medpush-virtual-machine.tail3e5104.ts.net"
+# The ✓/✗/· status marks and every box glyph are multi-byte, and the column
+# maths below measures with ${#var} — which counts bytes under a C locale and
+# shears the table. Deliberately NOT exported: bash re-reads its locale on
+# assignment either way, and exporting would push it onto npm/git/prisma when
+# redeploy.sh runs. If C.UTF-8 is unavailable bash falls back to C, as before.
+LC_ALL="${LC_ALL:-C.UTF-8}"
 
-# "systemd-unit|port|kind|public-base"
-SERVICES=(
-  "tiksurfer|3030|api|https://$FUNNEL_HOST:8443"
-  "insta-surfer|3033|api|https://$FUNNEL_HOST"
-  "prisma-tiktok|5555|studio|https://$FUNNEL_HOST:5555"
-  "prisma-insta|5556|studio|"
-)
+. "$(dirname "$0")/services.lib.sh"
+load_services || exit 1
 
 # --- gather rows -------------------------------------------------------------
 HEADER=("Service" "Port" "Status" "Local URL" "Public URL (Tailscale)")
 ROWS=()
 
 for entry in "${SERVICES[@]}"; do
-  IFS='|' read -r unit port kind public <<<"$entry"
+  IFS='|' read -r unit port dir label kind public <<<"$entry"
 
   if [ "$kind" = "api" ]; then
     state="$(systemctl is-active "$unit" 2>/dev/null)"
-    case "$state" in
-      active) status="active" ;;
-      "")     status="not installed" ;;
-      *)      status="$state" ;;          # inactive / failed / activating ...
-    esac
+    [ -n "$state" ] || state="unknown"     # active / inactive / failed / ...
 
-    resp="$(curl -s -m 5 "http://localhost:$port/api/health" 2>/dev/null)"
-    if echo "$resp" | grep -q '"database":"connected"'; then status="$status · db ✓"
-    elif [ -n "$resp" ];                                 then status="$status · db ✗"
-    else                                                      status="$status · no resp"
+    resp="$(health_body "$port")"
+    if health_says_db_connected "$resp"; then status="$state · db ✓"
+    elif [ -n "$resp" ];                  then status="$state · db ✗"
+    else                                       status="$state · no resp"
     fi
 
     local_url="http://localhost:$port/api"
@@ -52,7 +43,7 @@ for entry in "${SERVICES[@]}"; do
     code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://localhost:$port" 2>/dev/null)"
     case "$code" in
       200|302|307) status="running" ;;
-      *)           status="stopped (./run-prisma.sh)" ;;
+      *)           status="stopped" ;;
     esac
 
     local_url="http://localhost:$port"
@@ -76,11 +67,21 @@ for r in "${ROWS[@]}"; do absorb "$r"; done
 # --- drawing helpers ---------------------------------------------------------
 repeat() { local n=$1 s=$2 out=''; while (( n-- > 0 )); do out+="$s"; done; printf '%s' "$out"; }
 
+# Padding is computed from ${#text} (characters) and emitted as explicit spaces
+# rather than handed to printf's '%-*s' width, which counts *bytes*. The status
+# marks (· ✓ ✗) are multi-byte, so the two disagree and the box shears.
 center() {  # $1=text $2=width  -> text centered in exactly width chars
-  local text=$1 width=$2 len=${#1} total left right
+  local text=$1 width=$2 len total left right
+  len=${#text}
   total=$(( width - len )); (( total < 0 )) && total=0
   left=$(( total / 2 )); right=$(( total - left ))
   printf '%*s%s%*s' "$left" '' "$text" "$right" ''
+}
+
+pad_right() {  # $1=text $2=width -> text left-aligned in exactly width chars
+  local text=$1 width=$2 pad
+  pad=$(( width - ${#text} )); (( pad < 0 )) && pad=0
+  printf '%s%*s' "$text" "$pad" ''
 }
 
 border() {  # $1=left $2=junction $3=right
@@ -98,7 +99,7 @@ row() {  # $1=pipe-delimited cells  $2=align(left|center)
   for (( i=0; i<NCOL; i++ )); do
     cell="${cells[i]:-}"
     if [ "$2" = center ]; then out+=" $(center "$cell" "${WIDTHS[i]}") │"
-    else                       out+="$(printf ' %-*s ' "${WIDTHS[i]}" "$cell")│"; fi
+    else                       out+=" $(pad_right "$cell" "${WIDTHS[i]}") │"; fi
   done
   printf '%s\n' "$out"
 }

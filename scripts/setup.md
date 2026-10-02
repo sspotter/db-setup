@@ -1,75 +1,98 @@
-Saved as setup-services.sh in your repo. Now here's the 2-paste setup to run on the VM.
+# Installing the backend services on the VM
 
-Step 1 — SSH in and go to the project root
+Runs the backend APIs under systemd so they survive logout and come back after a
+reboot. PostgreSQL stays a separate system service.
 
+The script is `scripts/setup-services.sh` in this repo — run it from the
+checkout. Do **not** paste a copy onto the VM: an inline copy in this file drifted
+out of sync with the real script and lost the `readlink -f` fix, which meant the
+services worked until the first reboot and then died.
+
+Ports and unit names come from `scripts/services.conf`. Change them there.
+
+---
+
+## Step 1 — SSH in and go to the project root
+
+```bash
 ssh testuser@100.115.149.3
 cd ~/path/to/db-setup     # the folder that contains the "databases" subfolder
+```
 
-(If you're not sure of the path, run find ~ -name server.js -path '*tiktok*' 2>/dev/null — the project root is the part before /databases/tiktok/server.js.)
+If you're not sure of the path:
 
-Step 2 — Create the script on the VM (paste this whole block)
+```bash
+find ~ -name server.js -path '*tiktok*' 2>/dev/null
+```
 
-cat > setup-services.sh <<'SCRIPT'
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="${1:?Usage: sudo bash setup-services.sh <root> <user> <node>}"
-RUN_USER="${2:?missing user}"
-NODE="${3:?missing node}"
-NODE_DIR="$(dirname "$NODE")"
-for f in "$ROOT/databases/tiktok/server.js" "$ROOT/databases/instagram/server.js"; do
-  [ -f "$f" ] || { echo "ERROR: not found: $f — run from project root"; exit 1; }
-done
-write_unit() {
-  cat > "/etc/systemd/system/$1" <<EOF
-[Unit]
-Description=$2
-After=network-online.target
-Wants=network-online.target
+The project root is the part before `/databases/tiktok/server.js`.
 
-[Service]
-Type=simple
-User=$RUN_USER
-WorkingDirectory=$3
-Environment=NODE_ENV=production
-Environment=PATH=$NODE_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$NODE server.js
-Restart=always
-RestartSec=3
+## Step 2 — Get the latest scripts
 
-[Install]
-WantedBy=multi-user.target
-EOF
-  echo "  wrote /etc/systemd/system/$1"
-}
-write_unit tiksurfer.service    "Tik Surfer backend API (port 3030)"   "$ROOT/databases/tiktok"
-write_unit insta-surfer.service "Insta Surfer backend API (port 3033)" "$ROOT/databases/instagram"
-systemctl daemon-reload
-systemctl enable --now tiksurfer.service insta-surfer.service
-systemctl enable postgresql 2>/dev/null || echo "  (no 'postgresql' unit — skip)"
-echo "----- status -----"
-systemctl --no-pager status tiksurfer insta-surfer 2>/dev/null | grep -E "Active:|Main PID:" || true
-SCRIPT
+```bash
+git pull
+```
 
-Step 3 — Run it (one line; it asks for your sudo password)
+## Step 3 — Check each service has its `.env`
 
-sudo bash setup-services.sh "$PWD" "$(whoami)" "$(command -v node)"
+`.env` is not in git — it carries the DB credentials. The setup script refuses to
+run without it, so create them now if they're missing:
 
-Notice the three arguments — that's deliberate. They're evaluated as you before sudo, so the services run as your user with your node, not as root.
+```bash
+ls databases/tiktok/.env databases/instagram/.env
+```
 
-What you should see
+## Step 4 — Run it (it asks for your sudo password)
 
-Two lines saying wrote /etc/systemd/system/..., then Active: active (running) for both. Now close the terminal — they keep running, and they'll come back automatically after a reboot.
+```bash
+sudo bash scripts/setup-services.sh "$PWD" "$(whoami)" "$(command -v node)"
+```
 
-Verify it worked
+Notice the three arguments — that's deliberate. They're evaluated as *you*
+before `sudo` takes over, so the services run as your user with your node, not
+as root.
 
-curl localhost:3030/health   # tiktok
-curl localhost:3033/health   # insta
+---
 
-Everyday commands
+## What you should see
 
-journalctl -u tiksurfer -f                    # live logs (like the old terminal output)
+A `wrote /etc/systemd/system/…` line per service, then `Active: active (running)`
+for each. Now close the terminal — they keep running, and they come back
+automatically after a reboot.
+
+## Verify it worked
+
+```bash
+curl localhost:8443/api/health   # tiktok
+curl localhost:8442/api/health   # insta
+```
+
+Both should return JSON containing `"database":"connected"`. Note the path is
+`/api/health` — the routers mount under `/api` (`app.use('/api', healthRoutes)`),
+so a bare `/health` returns 404 even on a healthy service.
+
+For the full picture including the public Funnel URLs:
+
+```bash
+./scripts/status.sh
+```
+
+## Everyday commands
+
+```bash
+./scripts/status.sh                            # live status table
+./restart-services.sh                          # restart both + verify health
+./restart-services.sh tiksurfer                # restart just one
+./scripts/redeploy.sh                          # git pull, reinstall, restart
+
+journalctl -u tiksurfer -f                     # live logs
 journalctl -u insta-surfer -f
-sudo systemctl restart tiksurfer insta-surfer # after you change code / git pull
-sudo systemctl stop tiksurfer                 # stop one
+sudo systemctl stop tiksurfer                  # stop one
+```
 
-Paste back the output of Step 3 if anything doesn't say active (running) and I'll sort it out. Want me to commit setup-services.sh to the repo too?
+Prefer `./restart-services.sh` over `sudo systemctl restart` — a bare restart can
+leave a service "up but dead" when an orphaned process still holds the port. See
+`FIX-tiktok-8443-binding.md`.
+
+If anything doesn't come up, paste the output of Step 4 plus
+`journalctl -u <unit> -n 40 --no-pager`.

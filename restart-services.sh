@@ -21,13 +21,9 @@
 #
 set -uo pipefail
 
-PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-
-# unit | localhost port | working-dir (for stale-process cleanup) | label
-SERVICES=(
-  "tiksurfer|8443|$PROJECT_ROOT/databases/tiktok|Tik Surfer"
-  "insta-surfer|8442|$PROJECT_ROOT/databases/instagram|Insta Surfer"
-)
+# Unit names, ports and directories come from scripts/services.conf.
+. "$(dirname "$0")/scripts/services.lib.sh"
+load_services || exit 1
 
 RETRIES=6        # health attempts per service
 SLEEP=2          # seconds between attempts
@@ -36,9 +32,6 @@ SLEEP=2          # seconds between attempts
 FILTER="${1:-}"
 
 step() { echo; echo "==> $*"; }
-
-# Return the health response body for a port, or empty on no response.
-health_body() { curl -s -m 5 "http://localhost:$1/api/health" 2>/dev/null; }
 
 # Kill leftover `node server.js` processes for a service that systemd is not
 # tracking (orphans that keep the port bound). Safe: it only ever kills node
@@ -62,13 +55,14 @@ kill_stale() {
 overall_ok=1
 
 for entry in "${SERVICES[@]}"; do
-  IFS='|' read -r unit port dir label <<<"$entry"
+  IFS='|' read -r unit port dir label kind public <<<"$entry"
+  [ "$kind" = "api" ] || continue
   [ -n "$FILTER" ] && [ "$FILTER" != "$unit" ] && continue
 
   step "restarting $label ($unit, localhost:$port)"
 
   # Clear any orphan holding the port, then hand control back to systemd.
-  kill_stale "$unit" "$dir"
+  kill_stale "$unit" "$REPO_ROOT/$dir"
   sudo systemctl restart "$unit"
 
   ok=0
@@ -77,13 +71,13 @@ for entry in "${SERVICES[@]}"; do
 
     if ! systemctl is-active --quiet "$unit"; then
       echo "   [$i/$RETRIES] $unit not active — restarting"
-      kill_stale "$unit" "$dir"
+      kill_stale "$unit" "$REPO_ROOT/$dir"
       sudo systemctl restart "$unit"
       continue
     fi
 
     body="$(health_body "$port")"
-    if echo "$body" | grep -q '"database":"connected"'; then
+    if health_says_db_connected "$body"; then
       echo "   ✓ $label healthy — localhost:$port/api/health responding, db connected"
       ok=1; break
     elif [ -n "$body" ]; then
@@ -108,7 +102,13 @@ for entry in "${SERVICES[@]}"; do
 done
 
 step "listeners"
-sudo ss -tlnp 2>/dev/null | grep -E ':8443|:8442' || echo "   (none found on :8443/:8442)"
+API_PORTS=()
+for entry in "${SERVICES[@]}"; do
+  IFS='|' read -r unit port dir label kind public <<<"$entry"
+  [ "$kind" = "api" ] && API_PORTS+=(":$port")
+done
+PORT_PATTERN="$(IFS='|'; echo "${API_PORTS[*]}")"
+sudo ss -tlnp 2>/dev/null | grep -E "$PORT_PATTERN" || echo "   (none found on ${API_PORTS[*]})"
 
 echo
 if [ "$overall_ok" = 1 ]; then
