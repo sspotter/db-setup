@@ -476,6 +476,8 @@ router.get('/projects/:id/posts', async (req, res) => {
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
             WHERE ppo.project_id = $1
+              AND (p.is_hidden = false OR p.is_hidden IS NULL)
+              AND p.deleted_at IS NULL
         `;
         const params = [id];
         let paramIdx = 2;
@@ -486,7 +488,7 @@ router.get('/projects/:id/posts', async (req, res) => {
         }
 
         // Count query
-        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1`;
+        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1 AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
         const countParams = [id];
         let cIdx = 2;
         if (owner) {
@@ -666,6 +668,7 @@ router.get('/projects/:id/compare', async (req, res) => {
                     a.username AS target_username,
                     COALESCE((SELECT h.likes_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1), 0) AS likes,
                     COALESCE((SELECT h.comments_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1), 0) AS comments,
+                    COALESCE((SELECT h.video_view_count FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode ORDER BY h.captured_at DESC LIMIT 1), 0) AS views,
                     p.posted_at
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
@@ -679,6 +682,7 @@ router.get('/projects/:id/compare', async (req, res) => {
                 COUNT(DISTINCT pp.shortcode) AS post_count,
                 COALESCE(SUM(pp.likes), 0) AS total_likes,
                 COALESCE(SUM(pp.comments), 0) AS total_comments,
+                COALESCE(SUM(pp.views), 0) AS total_views,
                 COALESCE(SUM(pp.likes) + SUM(pp.comments), 0) AS total_engagement,
                 CASE WHEN COUNT(DISTINCT pp.shortcode) > 0 THEN ROUND((SUM(pp.likes) + SUM(pp.comments))::numeric / COUNT(DISTINCT pp.shortcode), 1) ELSE 0 END AS avg_engagement
             FROM profile_posts pp
@@ -753,6 +757,7 @@ router.get('/projects/:id/compare', async (req, res) => {
                 post_count: parseInt(m.post_count) || 0,
                 total_likes: parseInt(m.total_likes) || 0,
                 total_comments: parseInt(m.total_comments) || 0,
+                total_views: parseInt(m.total_views) || 0,
                 total_engagement: parseInt(m.total_engagement) || 0,
                 avg_engagement: parseFloat(m.avg_engagement) || 0,
                 potential_reach: reachMap[username] || 0,
