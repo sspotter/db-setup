@@ -23,12 +23,15 @@ const tiktokVideosRoutes = require('./routes/tiktok_videos');
 const tiktokCreatorsRoutes = require('./routes/tiktok_creators');
 const tiktokCommentsRoutes = require('./routes/tiktok_comments');
 const authenticateToken = require('./middleware/auth');
+const { activityLog, startRetention } = require('./middleware/activityLog');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 // --- Middleware ---
 app.use(cors());
+// Before express.json so 400/413 body-parse failures are logged too -> api_events
+app.use('/api', activityLog);
 app.use(express.json({ limit: '50mb' })); // large payloads from bulk post capture
 app.use(express.static('public')); // Serve static admin UI
 
@@ -56,6 +59,7 @@ module.exports = app;
 if (require.main === module) {
     async function start() {
         await initDatabase();
+        startRetention();
 
         // Bind explicitly to loopback + every non-Tailscale IPv4 interface.
         //

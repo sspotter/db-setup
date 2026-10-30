@@ -27,14 +27,105 @@ router.post('/login', (req, res) => {
 });
 
 // GET /api/admin/users
+// Each user also gets last_issue (newest >= 400 event) and ext_version (from the
+// newest successful login), matched by user_id or case-insensitive email.
 router.get('/users', verifyAdmin, async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT id, email, status, plan, active_sessions, max_devices, last_login, created_at FROM users ORDER BY created_at DESC'
+            `SELECT u.id, u.email, u.status, u.plan, u.active_sessions, u.max_devices, u.last_login, u.created_at,
+                    li.last_issue, ev.ext_version
+             FROM users u
+             LEFT JOIN LATERAL (
+                 SELECT json_build_object('reason', e.reason, 'status', e.status, 'path', e.path,
+                                          'error', e.error, 'created_at', e.created_at) AS last_issue
+                 FROM api_events e
+                 WHERE e.status >= 400 AND (e.user_id = u.id OR lower(e.email) = lower(u.email))
+                 ORDER BY e.created_at DESC LIMIT 1
+             ) li ON true
+             LEFT JOIN LATERAL (
+                 SELECT e.ext_version
+                 FROM api_events e
+                 WHERE e.reason = 'success' AND (e.user_id = u.id OR lower(e.email) = lower(u.email))
+                 ORDER BY e.created_at DESC LIMIT 1
+             ) ev ON true
+             ORDER BY u.created_at DESC`
         );
         res.json({ success: true, users: result.rows });
     } catch (err) {
         console.error('[ADMIN GET USERS] Error:', err.message);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// Returns the value if allowed, the first (default) entry if absent, null if unknown.
+const pickOption = (value, allowed) => (value === undefined || value === '' ? allowed[0] : allowed.includes(value) ? value : null);
+
+// GET /api/admin/events?q=&user=&action=all|login|api&result=any|success|failed&since=&today_start=&limit=200
+// Legacy params still honoured: email= (substring), kind=all|logins|errors.
+// stats.all_time / stats.today ignore filters; matching / failed / distinct_users use them.
+router.get('/events', verifyAdmin, async (req, res) => {
+    try {
+        const kind = pickOption(req.query.kind, ['all', 'logins', 'errors']);
+        const action = pickOption(req.query.action, ['all', 'login', 'api']);
+        const outcome = pickOption(req.query.result, ['any', 'success', 'failed']);
+        if (!kind || !action || !outcome) {
+            return res.status(400).json({ success: false, error: 'kind, action or result has an unknown value' });
+        }
+        const since = req.query.since ? new Date(req.query.since) : null;
+        const todayStart = req.query.today_start ? new Date(req.query.today_start) : null;
+        if ((since && isNaN(since)) || (todayStart && isNaN(todayStart))) {
+            return res.status(400).json({ success: false, error: 'since and today_start must be ISO dates' });
+        }
+        const limit = Math.min(1000, Math.max(1, parseInt(req.query.limit, 10) || 200));
+
+        const where = [];
+        const values = [];
+        if (req.query.email) {
+            values.push(String(req.query.email));
+            where.push(`email ILIKE '%' || $${values.length} || '%'`);
+        }
+        if (req.query.user) {
+            values.push(String(req.query.user));
+            where.push(`lower(email) = lower($${values.length})`);
+        }
+        if (req.query.q) {
+            values.push(String(req.query.q));
+            where.push(`concat_ws(' ', email, path, error, reason, ip) ILIKE '%' || $${values.length} || '%'`);
+        }
+        if (since) {
+            values.push(since);
+            where.push(`created_at >= $${values.length}`);
+        }
+        if (kind === 'logins' || action === 'login') where.push(`path = '/api/auth/login'`);
+        if (action === 'api') where.push(`path <> '/api/auth/login'`);
+        if (kind === 'errors' || outcome === 'failed') where.push('status >= 400');
+        if (outcome === 'success') where.push('status < 400');
+        const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+        const [events, stats] = await Promise.all([
+            pool.query(
+                `SELECT id, created_at, user_id, email, method, path, status, reason, error, ip, user_agent, ext_version
+                 FROM api_events
+                 ${whereSql}
+                 ORDER BY created_at DESC
+                 LIMIT $${values.length + 1}`,
+                [...values, limit]
+            ),
+            pool.query(
+                `SELECT (SELECT count(*) FROM api_events)::int AS all_time,
+                        (SELECT count(*) FROM api_events
+                         WHERE created_at >= coalesce($${values.length + 1}::timestamptz, date_trunc('day', now())))::int AS today,
+                        count(*)::int AS matching,
+                        (count(*) FILTER (WHERE status >= 400))::int AS failed,
+                        count(DISTINCT coalesce(lower(email), user_id::text))::int AS distinct_users
+                 FROM api_events
+                 ${whereSql}`,
+                [...values, todayStart]
+            ),
+        ]);
+        res.json({ success: true, events: events.rows, stats: stats.rows[0] });
+    } catch (err) {
+        console.error('[ADMIN GET EVENTS] Error:', err.message);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
