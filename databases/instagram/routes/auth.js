@@ -59,6 +59,7 @@ router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!email || !password) {
+            res.locals.activity = { reason: 'missing_fields', email };
             return res.status(400).json({ error: 'Email and password are required' });
         }
 
@@ -66,6 +67,7 @@ router.post('/login', async (req, res) => {
         const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
         if (result.rows.length === 0) {
             console.log(`[AUTH LOGIN] User not found: ${email}`);
+            res.locals.activity = { reason: 'no_such_user', email };
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
@@ -75,11 +77,14 @@ router.post('/login', async (req, res) => {
         const validPassword = await bcrypt.compare(password, user.password_hash);
         if (!validPassword) {
             console.log(`[AUTH LOGIN] Invalid password for user: ${email}`);
+            res.locals.activity = { reason: 'wrong_password', userId: user.id, email };
             return res.status(401).json({ error: 'Invalid email or password' });
         }
 
         // Check if user is active
         if (user.status !== 'active') {
+            // `error` overrides the logged text only; the client body is unchanged.
+            res.locals.activity = { reason: 'disabled', userId: user.id, email, error: `Account is disabled or suspended (status: ${user.status})` };
             return res.status(403).json({ error: 'Account is disabled or suspended' });
         }
 
@@ -88,6 +93,7 @@ router.post('/login', async (req, res) => {
         const currentSessions = user.active_sessions || 0;
         
         if (currentSessions >= maxDevices) {
+            res.locals.activity = { reason: 'device_limit', userId: user.id, email };
             return res.status(403).json({ 
                 error: 'Device limit reached', 
                 message: `You are already logged in on ${currentSessions} devices.` 
@@ -108,6 +114,7 @@ router.post('/login', async (req, res) => {
         // Omit password hash from response
         const { password_hash, ...userWithoutPassword } = user;
 
+        res.locals.activity = { reason: 'success', userId: user.id, email };
         res.json({
             success: true,
             user: userWithoutPassword,
@@ -115,6 +122,7 @@ router.post('/login', async (req, res) => {
         });
     } catch (err) {
         console.error('[AUTH LOGIN] Error:', err.message);
+        res.locals.activity = { ...res.locals.activity, reason: 'server_error', email: req.body && req.body.email };
         res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         client.release();

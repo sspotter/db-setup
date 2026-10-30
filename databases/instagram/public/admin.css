@@ -516,6 +516,478 @@ select option {
     to { transform: rotate(360deg); }
 }
 
+/* Activity section */
+.activity-section {
+    margin-top: 0;
+}
+
+.ext-version {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.15rem;
+}
+
+.last-issue {
+    color: var(--text-secondary);
+}
+
+.last-issue-recent {
+    color: var(--danger);
+    font-weight: 500;
+}
+
+.large-modal {
+    max-width: 1100px;
+    width: 95vw;
+}
+
+/* --- Activity stat cards --- */
+
+.activity-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.stat-card {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    text-align: left;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    min-width: 0;
+    color: inherit;
+}
+
+.stat-card:hover {
+    background: rgba(15, 23, 42, 0.8);
+}
+
+.stat-card.active {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 1px var(--accent-blue);
+}
+
+.stat-card-static {
+    cursor: default;
+}
+
+.stat-card-static:hover {
+    background: rgba(15, 23, 42, 0.5);
+}
+
+.stat-number {
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.stat-number-danger {
+    color: var(--danger);
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.25rem;
+}
+
+/* --- Filter bar --- */
+
+.activity-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.filter-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.filter-field label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.filter-search {
+    flex: 1 1 220px;
+}
+
+.filter-search input {
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+}
+
+.filter-field select {
+    padding: 0.6rem 2.5rem 0.6rem 1rem;
+    font-size: 0.9rem;
+    min-width: 140px;
+}
+
+.filter-actions {
+    flex: 1 1 auto;
+}
+
+.filter-spacer {
+    visibility: hidden;
+}
+
+.filter-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.auto-refresh-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 500;
+}
+
+/* Checkbox drawn as a switch */
+.auto-refresh-toggle input {
+    appearance: none;
+    position: relative;
+    flex: none;
+    width: 36px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 999px;
+    background: var(--glass-highlight);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.auto-refresh-toggle input::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-primary);
+    transition: transform var(--transition-fast);
+}
+
+.auto-refresh-toggle input:checked {
+    background: var(--success);
+}
+
+.auto-refresh-toggle input:checked::after {
+    transform: translateX(16px);
+}
+
+.auto-refresh-toggle input:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+/* --- Activity feed --- */
+
+.activity-feed {
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    background: rgba(15, 23, 42, 0.3);
+    overflow: hidden;
+}
+
+.history-feed {
+    max-height: 65vh;
+    overflow-y: auto;
+    border-radius: 8px;
+}
+
+.activity-day-header {
+    padding: 0.6rem 1rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--text-secondary);
+    background: var(--table-header-bg);
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.activity-empty,
+.activity-more {
+    padding: 1.5rem 1rem;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.activity-row {
+    border-bottom: 1px solid var(--glass-border);
+}
+
+.activity-row:last-child {
+    border-bottom: none;
+}
+
+.activity-row-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.85rem 1rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.activity-row-header:hover {
+    background: var(--table-row-hover);
+}
+
+.activity-time-col {
+    flex: 0 0 90px;
+    min-width: 0;
+    padding-top: 0.1rem;
+}
+
+.activity-time {
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.activity-rel {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.1rem;
+}
+
+.activity-avatar {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: white;
+}
+
+.activity-name-col {
+    flex: 0 0 180px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding-top: 0.1rem;
+}
+
+.activity-email {
+    font-size: 0.9rem;
+}
+
+.activity-unknown {
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
+.activity-subline {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.15rem;
+}
+
+.activity-plan {
+    text-transform: capitalize;
+}
+
+.activity-main-col {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.activity-badge-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.activity-sentence {
+    font-size: 0.85rem;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
+.activity-links {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.activity-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--danger);
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.activity-link:hover {
+    text-decoration: underline;
+}
+
+.activity-caret {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1rem;
+    cursor: pointer;
+    transition: transform var(--transition-fast);
+    padding: 0.2rem;
+}
+
+.activity-caret[aria-expanded="true"] {
+    transform: rotate(180deg);
+    color: var(--text-primary);
+}
+
+.activity-details {
+    padding: 0 1rem 1rem 1rem;
+    background: rgba(15, 23, 42, 0.4);
+}
+
+.activity-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem 1.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--glass-border);
+}
+
+.activity-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.activity-detail-full {
+    grid-column: 1 / -1;
+}
+
+.detail-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+}
+
+.detail-value {
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+}
+
+/* Badges (result states) — reuse the existing success/warning/danger tokens */
+.badge-success {
+    background: var(--badge-active-bg);
+    color: var(--badge-active-text);
+}
+
+.badge-danger {
+    background: var(--badge-suspended-bg);
+    color: var(--badge-suspended-text);
+}
+
+.badge-warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+}
+
+.badge-grey {
+    background: var(--badge-inactive-bg);
+    color: var(--badge-inactive-text);
+}
+
+/* Phone-width safety: stack rows and let tables scroll inside their
+   container instead of breaking page layout */
+@media (max-width: 640px) {
+    .admin-container {
+        padding: 1rem;
+    }
+
+    .panel-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .search-bar input {
+        width: 100%;
+    }
+
+    .large-modal {
+        width: 100vw;
+        max-width: 100vw;
+        margin: 0 0.5rem;
+    }
+
+    .activity-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .activity-filters {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    /* In a column, the desktop 220px flex-basis would become a 220px-tall gap */
+    .filter-search,
+    .filter-actions {
+        flex: none;
+    }
+
+    .filter-field select,
+    .filter-search input {
+        width: 100%;
+    }
+
+    .activity-row-header {
+        flex-wrap: wrap;
+    }
+
+    .activity-time-col {
+        flex: 1 1 100%;
+        order: -1;
+        display: flex;
+        gap: 0.5rem;
+        align-items: baseline;
+    }
+
+    .activity-name-col {
+        flex: 1 1 auto;
+    }
+
+    .activity-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 /* Toast */
 .toast {
     position: fixed;

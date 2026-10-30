@@ -59,6 +59,7 @@
                             <th>Status</th>
                             <th>Devices</th>
                             <th>Last Login</th>
+                            <th>Last Issue</th>
                             <th>Created At</th>
                             <th>Actions</th>
                         </tr>
@@ -70,6 +71,85 @@
             </div>
             <div id="loading" class="loading-spinner"></div>
             <div id="error-message" class="error-message hidden"></div>
+        </section>
+
+        <section class="activity-section glass-panel">
+            <div class="panel-header">
+                <h2>Activity</h2>
+            </div>
+
+            <div class="activity-stats">
+                <button type="button" class="stat-card" id="stat-card-all" data-stat="all">
+                    <div class="stat-number" id="stat-all-time">0</div>
+                    <div class="stat-label">all time</div>
+                </button>
+                <button type="button" class="stat-card" id="stat-card-today" data-stat="today">
+                    <div class="stat-number" id="stat-today">0</div>
+                    <div class="stat-label">click to show only today</div>
+                </button>
+                <button type="button" class="stat-card" id="stat-card-failed" data-stat="failed">
+                    <div class="stat-number stat-number-danger" id="stat-failed">0</div>
+                    <div class="stat-label">denied, invalid or errored attempts</div>
+                </button>
+                <div class="stat-card stat-card-static" id="stat-card-distinct">
+                    <div class="stat-number" id="stat-distinct">0</div>
+                    <div class="stat-label">distinct users in these events</div>
+                </div>
+            </div>
+
+            <div class="activity-filters">
+                <div class="filter-field filter-search">
+                    <label for="activity-search">Search</label>
+                    <input type="text" id="activity-search" placeholder="Email, path, error, IP…" autocomplete="off">
+                </div>
+                <div class="filter-field">
+                    <label for="activity-user-filter">User</label>
+                    <select id="activity-user-filter">
+                        <option value="">All users</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="activity-action-filter">Action</label>
+                    <select id="activity-action-filter">
+                        <option value="all">All actions</option>
+                        <option value="login">Logins</option>
+                        <option value="api">API calls</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="activity-result-filter">Result</label>
+                    <select id="activity-result-filter">
+                        <option value="any">Any</option>
+                        <option value="success">Success</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+                <div class="filter-field">
+                    <label for="activity-when-filter">When</label>
+                    <select id="activity-when-filter">
+                        <option value="any">Any time</option>
+                        <option value="today">Today</option>
+                        <option value="24h">Last 24 hours</option>
+                        <option value="7d">Last 7 days</option>
+                        <option value="30d">Last 30 days</option>
+                    </select>
+                </div>
+                <div class="filter-field filter-actions">
+                    <label class="filter-spacer" aria-hidden="true">&nbsp;</label>
+                    <div class="filter-actions-row">
+                        <button type="button" id="activity-apply-btn" class="btn primary-btn">Apply</button>
+                        <button type="button" id="activity-export-btn" class="btn secondary-btn">Export CSV</button>
+                        <label class="auto-refresh-toggle">
+                            <input type="checkbox" id="activity-autorefresh-toggle">
+                            <span>Auto-refresh</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="activity-feed" class="activity-feed"></div>
+            <div id="activity-loading" class="loading-spinner hidden"></div>
+            <div id="activity-error" class="error-message hidden"></div>
         </section>
     </main>
 
@@ -154,6 +234,19 @@
                 <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
                 <button type="button" id="confirm-logout-btn" class="btn primary-btn">Force Logout</button>
             </div>
+        </div>
+    </div>
+
+    <!-- User History Modal -->
+    <div id="history-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel large-modal">
+            <div class="modal-header">
+                <h3 id="history-modal-title">History</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div id="history-feed" class="activity-feed history-feed"></div>
+            <div id="history-loading" class="loading-spinner hidden"></div>
+            <div id="history-error" class="error-message hidden"></div>
         </div>
     </div>
 
