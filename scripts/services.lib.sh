@@ -48,9 +48,9 @@ load_services() {
 # Health body for a localhost port, or empty if the service did not answer.
 health_body() { curl -s -m 5 "http://localhost:$1/api/health" 2>/dev/null; }
 
-# True when a health body reports a live database. Tolerates the whitespace
-# variations JSON serialisers differ on, which a literal substring match does
-# not.
+# True when a health body reports a live database, or "none" for a service that
+# has no database (the dashboard). Tolerates the whitespace variations JSON
+# serialisers differ on, which a literal substring match does not.
 health_says_db_connected() {
-  printf '%s' "$1" | grep -Eq '"database"[[:space:]]*:[[:space:]]*"connected"'
+  printf '%s' "$1" | grep -Eq '"database"[[:space:]]*:[[:space:]]*"(connected|none)"'
 }

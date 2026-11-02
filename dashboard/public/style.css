@@ -1,0 +1,351 @@
+:root {
+    --bg-base: #0f172a;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+
+    --accent-blue: #3b82f6;
+    --accent-purple: #8b5cf6;
+    --danger: #ef4444;
+    --danger-hover: #dc2626;
+    --success: #10b981;
+    --warning: #f59e0b;
+
+    --glass-bg: rgba(30, 41, 59, 0.4);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.36);
+    --glass-blur: blur(16px);
+
+    --table-header-bg: rgba(15, 23, 42, 0.6);
+    --table-row-hover: rgba(255, 255, 255, 0.03);
+
+    --badge-active-bg: rgba(16, 185, 129, 0.15);
+    --badge-active-text: #34d399;
+    --badge-suspended-bg: rgba(239, 68, 68, 0.15);
+    --badge-suspended-text: #f87171;
+
+    --transition-fast: 0.15s ease;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* Flex children default to min-width:auto, which lets a wide table push
+   the whole page wider than the viewport. Force them to shrink instead
+   and let .table-container's own overflow-x handle the scrolling. */
+.container > * {
+    min-width: 0;
+}
+
+.status-card,
+.status-grid > * {
+    min-width: 0;
+}
+
+.glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    box-shadow: var(--glass-shadow);
+    padding: 1.5rem;
+}
+
+/* Login */
+.login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 360px;
+}
+
+.login-card h1 {
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+}
+
+/* Header */
+.header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.header h1 {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.header h1 span {
+    font-weight: 300;
+    color: var(--text-secondary);
+}
+
+.header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+}
+
+.updated-stamp {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.btn {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-weight: 500;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: var(--transition-fast);
+    border: 1px solid var(--glass-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.btn:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+.btn.primary {
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+    border: none;
+    color: white;
+}
+
+.btn.danger {
+    background: var(--danger);
+    border: none;
+    color: white;
+}
+
+.btn.danger:hover {
+    background: var(--danger-hover);
+}
+
+input, select {
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--glass-border);
+    color: var(--text-primary);
+    padding: 0.65rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+input:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    display: block;
+    margin-bottom: 0.4rem;
+}
+
+.error-message {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.2);
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+}
+
+.hidden { display: none !important; }
+
+/* Alerts strip */
+#alerts-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.alert-row {
+    padding: 0.6rem 0.9rem;
+    border-radius: 10px;
+    font-size: 0.85rem;
+    display: flex;
+    gap: 0.6rem;
+    align-items: baseline;
+    border: 1px solid var(--glass-border);
+}
+
+.alert-row.danger {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+}
+
+.alert-row.warning {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+}
+
+.alert-row.success {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #6ee7b7;
+}
+
+/* Status cards */
+.status-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+}
+
+.status-card h2 {
+    font-size: 1.05rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.badge {
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    display: inline-flex;
+}
+
+.badge.up { background: var(--badge-active-bg); color: var(--badge-active-text); }
+.badge.down { background: var(--badge-suspended-bg); color: var(--badge-suspended-text); }
+.badge.status-ok { background: var(--badge-active-bg); color: var(--badge-active-text); }
+.badge.status-err { background: var(--badge-suspended-bg); color: var(--badge-suspended-text); }
+.badge.status-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+
+.badge.platform-tiktok { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.badge.platform-instagram { background: rgba(139, 92, 246, 0.15); color: #c4b5fd; }
+
+.field-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1rem;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+
+.field-grid dt {
+    color: var(--text-secondary);
+}
+
+.field-grid dd {
+    color: var(--text-primary);
+}
+
+.status-card h3 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary);
+    margin: 1rem 0 0.5rem;
+}
+
+/* Tables */
+.table-container {
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid var(--glass-border);
+    background: rgba(15, 23, 42, 0.3);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    white-space: nowrap;
+}
+
+th {
+    background: var(--table-header-bg);
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--glass-border);
+}
+
+td {
+    padding: 0.6rem 0.75rem;
+    border-bottom: 1px solid var(--glass-border);
+    font-size: 0.85rem;
+}
+
+tbody tr:hover { background: var(--table-row-hover); }
+tbody tr:last-child td { border-bottom: none; }
+
+/* Events panel */
+.events-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.events-header h2 { font-size: 1.1rem; }
+
+/* Checks panel */
+.checks-note {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+}
+
+.check-row.pass { color: var(--success); }
+.check-row.fail { color: var(--danger); }
+
+/* Phone width: stack, no page scroll, tables scroll inside card */
+@media (max-width: 640px) {
+    .container { padding: 1rem; }
+    .status-grid { grid-template-columns: 1fr; }
+    .field-grid { grid-template-columns: 1fr; }
+    .header { flex-direction: column; align-items: stretch; }
+    .header-actions { justify-content: space-between; }
+}

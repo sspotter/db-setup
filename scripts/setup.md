@@ -39,8 +39,12 @@ git pull
 run without it, so create them now if they're missing:
 
 ```bash
-ls databases/tiktok/.env databases/instagram/.env
+ls databases/tiktok/.env databases/instagram/.env dashboard/.env
 ```
+
+The dashboard's `.env` holds its own password plus both backends' admin
+passwords: `cp dashboard/.env.example dashboard/.env` and fill it in. Run
+`(cd dashboard && npm install --omit=dev)` once before Step 4.
 
 ## Step 4 — Run it (it asks for your sudo password)
 
@@ -65,9 +69,18 @@ automatically after a reboot.
 ```bash
 curl localhost:8443/api/health   # tiktok
 curl localhost:8442/api/health   # insta
+curl localhost:8444/api/health   # dashboard
 ```
 
-Both should return JSON containing `"database":"connected"`. Note the path is
+The backends should return JSON containing `"database":"connected"`; the
+dashboard has no database and returns `"database":"none"`. That only proves the
+dashboard is running — to prove it can reach both backends:
+
+```bash
+curl -s -H "x-dashboard-password: <DASHBOARD_PASSWORD>" localhost:8444/api/overview
+```
+
+Both `tiktok` and `instagram` must show `"up":true` and `"errors":[]`. Note the path is
 `/api/health` — the routers mount under `/api` (`app.use('/api', healthRoutes)`),
 so a bare `/health` returns 404 even on a healthy service.
 
@@ -87,8 +100,19 @@ For the full picture including the public Funnel URLs:
 
 journalctl -u tiksurfer -f                     # live logs
 journalctl -u insta-surfer -f
+journalctl -u tiksurfer-dashboard -f
 sudo systemctl stop tiksurfer                  # stop one
 ```
+
+## Monitoring dashboard
+
+`tiksurfer-dashboard` (`dashboard/`) is one read-only page showing both backends
+side by side: health, alerts, failures in the last 15 min, slow endpoints, user
+counts and a merged activity feed. It is not on the Funnel — open it over
+Tailscale at `http://100.115.149.3:8444/` and log in with `DASHBOARD_PASSWORD`.
+"Run checks" sends one failed login (`smoke-check@dashboard.invalid`) per
+backend, so it shows up in their activity logs; it is limited to once per 2 min
+so it can never trip the backends' own failed-logins-per-IP alert.
 
 Prefer `./restart-services.sh` over `sudo systemctl restart` — a bare restart can
 leave a service "up but dead" when an orphaned process still holds the port. See

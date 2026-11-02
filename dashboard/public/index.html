@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Surfer Monitor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <!-- Login screen -->
+    <div id="login-screen" class="login-screen">
+        <div class="login-card glass-panel">
+            <h1>Surfer Monitor</h1>
+            <form id="login-form">
+                <div style="margin-bottom:1rem;">
+                    <label for="dashboard-password">Dashboard password</label>
+                    <input type="password" id="dashboard-password" required placeholder="••••••••" style="width:100%;" autocomplete="current-password">
+                </div>
+                <div id="login-error" class="error-message hidden"></div>
+                <button type="submit" class="btn primary" style="width:100%; margin-top:0.5rem;">Sign in</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main dashboard -->
+    <main id="app" class="container hidden">
+        <header class="header glass-panel">
+            <h1>Surfer Monitor</h1>
+            <div class="header-actions">
+                <span id="updated-stamp" class="updated-stamp">Updated —:—:—</span>
+                <button id="refresh-btn" class="btn">Refresh</button>
+                <button id="check-btn" class="btn">Run checks</button>
+                <button id="logout-btn" class="btn danger">Logout</button>
+            </div>
+        </header>
+
+        <section id="alerts-strip" class="glass-panel" aria-live="polite" aria-label="Alerts"></section>
+
+        <section class="status-grid">
+            <div id="card-tiktok" class="status-card glass-panel"></div>
+            <div id="card-instagram" class="status-card glass-panel"></div>
+        </section>
+
+        <section class="glass-panel">
+            <div class="events-header">
+                <h2>Event feed</h2>
+                <div>
+                    <label for="platform-filter" style="display:inline; margin-right:0.5rem;">Platform</label>
+                    <select id="platform-filter">
+                        <option value="all">All</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram">Instagram</option>
+                    </select>
+                </div>
+            </div>
+            <div id="events-errors"></div>
+            <div class="table-container">
+                <table id="events-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Platform</th>
+                            <th>Status</th>
+                            <th>Method / Path</th>
+                            <th>Email</th>
+                            <th>Reason / Error</th>
+                            <th>ms</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="checks-panel" class="glass-panel hidden">
+            <h2>Check results</h2>
+            <div id="checks-result"></div>
+            <p class="checks-note">Sends one failed login per backend; limited to once per 2 min.</p>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
