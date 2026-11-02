@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { toObservedAt, IG_USERS_FOLLOWERS_SET } = require('../observed');
 
 /**
@@ -81,6 +82,7 @@ router.post('/users', async (req, res) => {
         res.json({ success: true, upserted });
     } catch (err) {
         console.error('[USERS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

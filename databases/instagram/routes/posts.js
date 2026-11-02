@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { toObservedAt, newer, bothUnknown, IG_USERS_FOLLOWERS_SET, LATEST_METRICS_ORDER } = require('../observed');
 
 // Any real Instagram reach is far below this; bigger values are the old
@@ -297,6 +298,7 @@ router.post('/posts', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[POSTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -395,6 +397,7 @@ router.get('/posts', async (req, res) => {
         });
     } catch (err) {
         console.error('[POSTS GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -424,6 +427,7 @@ router.get('/posts/:shortcode/history', async (req, res) => {
         });
     } catch (err) {
         console.error('[HISTORY] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

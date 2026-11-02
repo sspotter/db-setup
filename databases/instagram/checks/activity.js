@@ -1,6 +1,6 @@
 /**
  * Admin activity log checker.
- * Run from backend-tiksurfer/ (dotenv loads .env relative to cwd), e.g.:
+ * Run from backend/ (dotenv loads .env relative to cwd), e.g.:
  *
  *   node checks/activity.js [email] [--kind all|logins|errors] [--limit N]
  *   node checks/activity.js --smoke [--url http://localhost:<PORT>]
@@ -115,7 +115,7 @@ async function runSmoke(url) {
             }
         } catch (err) {
             if (/relation "api_events" does not exist/.test(err.message)) {
-                console.error('FAIL: table public.api_events does not exist. Run migrations/v3_add_api_events.sql first.');
+                console.error('FAIL: table public.api_events does not exist. Run migrations/004_add_api_events.sql first.');
             } else {
                 console.error(`FAIL: query error: ${err.message}`);
             }

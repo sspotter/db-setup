@@ -256,7 +256,8 @@ CREATE TABLE public.users (
     active_sessions integer DEFAULT 0,
     last_login timestamp with time zone,
     max_devices integer DEFAULT 3,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    last_seen timestamp with time zone
 );
 
 
@@ -695,6 +696,109 @@ ALTER TABLE ONLY public.user_scraped_posts
 
 ALTER TABLE ONLY public.user_scraped_posts
     ADD CONSTRAINT user_scraped_posts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Admin activity log (backend-tiksurfer migrations v3_add_api_events, v4_add_password_resets, v5_add_diagnostics)
+--
+
+--
+-- Name: api_events; Type: TABLE; Schema: public; Owner: devuser
+-- user_id has no FK on purpose: history survives a user delete.
+--
+
+CREATE TABLE public.api_events (
+    id bigserial NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    user_id uuid,
+    email character varying(255),
+    method character varying(10) NOT NULL,
+    path character varying(500) NOT NULL,
+    status integer NOT NULL,
+    reason character varying(50),
+    error character varying(500),
+    ip character varying(100),
+    user_agent character varying(500),
+    ext_version character varying(50),
+    duration_ms integer,
+    server_error character varying(1000)
+);
+
+
+ALTER TABLE public.api_events OWNER TO devuser;
+
+--
+-- Name: password_resets; Type: TABLE; Schema: public; Owner: devuser
+--
+
+CREATE TABLE public.password_resets (
+    token_hash character(64) NOT NULL,
+    user_id uuid NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    used_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+ALTER TABLE public.password_resets OWNER TO devuser;
+
+--
+-- Name: api_events api_events_pkey; Type: CONSTRAINT; Schema: public; Owner: devuser
+--
+
+ALTER TABLE ONLY public.api_events
+    ADD CONSTRAINT api_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: password_resets password_resets_pkey; Type: CONSTRAINT; Schema: public; Owner: devuser
+--
+
+ALTER TABLE ONLY public.password_resets
+    ADD CONSTRAINT password_resets_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: idx_api_events_created_at; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_api_events_created_at ON public.api_events USING btree (created_at DESC);
+
+
+--
+-- Name: idx_api_events_email_created; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_api_events_email_created ON public.api_events USING btree (lower((email)::text), created_at DESC);
+
+
+--
+-- Name: idx_api_events_path_created; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_api_events_path_created ON public.api_events USING btree (path, created_at DESC);
+
+
+--
+-- Name: idx_api_events_user_created; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_api_events_user_created ON public.api_events USING btree (user_id, created_at DESC);
+
+
+--
+-- Name: idx_password_resets_user; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_password_resets_user ON public.password_resets USING btree (user_id);
+
+
+--
+-- Name: password_resets password_resets_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: devuser
+--
+
+ALTER TABLE ONLY public.password_resets
+    ADD CONSTRAINT password_resets_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

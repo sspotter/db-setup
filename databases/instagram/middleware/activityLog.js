@@ -15,6 +15,39 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // Truncate to the column size; null/undefined/'' stay null.
 const cut = (v, n) => (v === undefined || v === null || v === '' ? null : String(v).slice(0, n));
 
+const slowMs = () => parseInt(process.env.SLOW_REQUEST_MS, 10) || 2000;
+
+// Which successful (<400) requests are recorded so the admin can see what users actually do
+// (fetching posts, saving captures, ...): ACTIVITY_LOG_SUCCESS = all (default) | writes | none.
+// The health check, CORS preflights and the admin panel's own GET polling are never recorded.
+const wantsSuccess = (req, urlPath) => {
+    const mode = String(process.env.ACTIVITY_LOG_SUCCESS || 'all').toLowerCase();
+    if (mode === 'none') return false;
+    if (req.method === 'OPTIONS' || urlPath === '/api/health') return false;
+    if (req.method === 'GET' && urlPath.startsWith('/api/admin/')) return false;
+    return mode === 'all' || (req.method !== 'GET' && req.method !== 'HEAD');
+};
+
+// Routes call this in their catch block so the log keeps the real cause of a 5xx.
+// The client-facing body is unchanged.
+function logServerError(res, err) {
+    res.locals.activity = { ...res.locals.activity, serverError: String((err && err.message) || err) };
+}
+
+// users.last_seen = last authenticated call that succeeded; written at most once per window per user.
+const SEEN_EVERY_MS = 5 * 60 * 1000;
+const seenWrittenAt = new Map();
+function touchLastSeen(userId) {
+    const now = Date.now();
+    if (now - (seenWrittenAt.get(userId) || 0) < SEEN_EVERY_MS) return;
+    seenWrittenAt.set(userId, now);
+    pool.query('UPDATE users SET last_seen = now() WHERE id = $1', [userId])
+        .catch((err) => console.error('[ACTIVITY] last_seen update failed:', err.message));
+}
+
+// Read by GET /api/admin/health.
+const retentionStatus = { lastRunAt: null, lastDeleted: null, lastError: null };
+
 // Unverified decode — only used to label 401/403 rows with whose token it was.
 function decodeBearer(req) {
     const auth = req.headers['authorization'];
@@ -24,6 +57,7 @@ function decodeBearer(req) {
 }
 
 function activityLog(req, res, next) {
+    const startedAt = Date.now();
     // Remember the error text the route sends back; never keep the whole body.
     let errorText = null;
     const originalJson = res.json.bind(res);
@@ -37,7 +71,11 @@ function activityLog(req, res, next) {
     res.on('finish', () => {
         const urlPath = req.originalUrl.split('?')[0];
         const isLogin = urlPath === LOGIN_PATH;
-        if (!isLogin && res.statusCode < 400) return;
+        const durationMs = Date.now() - startedAt;
+        if (req.user && UUID_RE.test(String(req.user.id)) && res.statusCode < 400) touchLastSeen(String(req.user.id));
+        // A route that sets an explicit reason on success (e.g. reset_success) wants it recorded.
+        const flagged = !!(res.locals.activity && res.locals.activity.reason);
+        if (!isLogin && res.statusCode < 400 && durationMs < slowMs() && !flagged && !wantsSuccess(req, urlPath)) return;
 
         const act = res.locals.activity || {};
         const token = req.user ? null : decodeBearer(req);
@@ -49,8 +87,8 @@ function activityLog(req, res, next) {
         const error = res.statusCode >= 400 ? (act.error || errorText) : null;
 
         pool.query(
-            `INSERT INTO api_events (user_id, email, method, path, status, reason, error, ip, user_agent, ext_version)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            `INSERT INTO api_events (user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
             [
                 UUID_RE.test(String(userId)) ? String(userId) : null, // bad decoded ids would fail the uuid cast
                 cut(email, 255),
@@ -62,6 +100,8 @@ function activityLog(req, res, next) {
                 cut(ip, 100),
                 cut(req.headers['user-agent'], 500),
                 cut(req.headers['x-extension-version'], 50),
+                durationMs,
+                res.statusCode >= 500 ? cut(act.serverError, 1000) : null,
             ]
         ).catch((err) => console.error('[ACTIVITY] Insert failed:', err.message));
     });
@@ -73,12 +113,14 @@ function activityLog(req, res, next) {
 // rows older than 90 days, then prunes again every 24h.
 function startRetention() {
     const prune = () => pool.query(RETENTION_SQL)
-        .catch((err) => console.error('[ACTIVITY] Retention delete failed:', err.message));
+        .then((r) => { retentionStatus.lastRunAt = new Date(); retentionStatus.lastDeleted = r.rowCount; retentionStatus.lastError = null; })
+        .catch((err) => { retentionStatus.lastError = err.message; console.error('[ACTIVITY] Retention delete failed:', err.message); });
 
     (async () => {
         try {
-            const sql = fs.readFileSync(path.join(__dirname, '../migrations/v3_add_api_events.sql'), 'utf8');
-            await pool.query(sql);
+            for (const f of ['004_add_api_events.sql', '005_add_password_resets.sql', '006_add_diagnostics.sql']) {
+                await pool.query(fs.readFileSync(path.join(__dirname, '../migrations', f), 'utf8'));
+            }
         } catch (err) {
             console.error('[ACTIVITY] Migration failed:', err.message);
         }
@@ -88,4 +130,4 @@ function startRetention() {
     setInterval(prune, 24 * 60 * 60 * 1000).unref();
 }
 
-module.exports = { activityLog, startRetention };
+module.exports = { activityLog, startRetention, logServerError, retentionStatus };

@@ -221,8 +221,43 @@ model users {
   last_login          DateTime?             @db.Timestamptz(6)
   max_devices         Int?                  @default(3)
   created_at          DateTime?             @default(now()) @db.Timestamptz(6)
+  last_seen           DateTime?             @db.Timestamptz(6)
   comment_scrape_logs comment_scrape_logs[]
+  password_resets     password_resets[]
   projects            projects[]
   scrape_sessions     scrape_sessions[]
   user_scraped_posts  user_scraped_posts[]
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model api_events {
+  id           BigInt   @id @default(autoincrement())
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+  user_id      String?  @db.Uuid
+  email        String?  @db.VarChar(255)
+  method       String   @db.VarChar(10)
+  path         String   @db.VarChar(500)
+  status       Int
+  reason       String?  @db.VarChar(50)
+  error        String?  @db.VarChar(500)
+  ip           String?  @db.VarChar(100)
+  user_agent   String?  @db.VarChar(500)
+  ext_version  String?  @db.VarChar(50)
+  duration_ms  Int?
+  server_error String?  @db.VarChar(1000)
+
+  @@index([created_at(sort: Desc)], map: "idx_api_events_created_at")
+  @@index([path, created_at(sort: Desc)], map: "idx_api_events_path_created")
+  @@index([user_id, created_at(sort: Desc)], map: "idx_api_events_user_created")
+}
+
+model password_resets {
+  token_hash String    @id @db.Char(64)
+  user_id    String    @db.Uuid
+  expires_at DateTime  @db.Timestamptz(6)
+  used_at    DateTime? @db.Timestamptz(6)
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_password_resets_user")
 }

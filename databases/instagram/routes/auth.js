@@ -2,10 +2,12 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const pool = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_please_change';
 const JWT_EXPIRES_IN = '7d';
+const { logServerError } = require('../middleware/activityLog');
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
@@ -47,6 +49,7 @@ router.post('/register', async (req, res) => {
         });
     } catch (err) {
         console.error('[AUTH REGISTER] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         client.release();
@@ -123,9 +126,44 @@ router.post('/login', async (req, res) => {
     } catch (err) {
         console.error('[AUTH LOGIN] Error:', err.message);
         res.locals.activity = { ...res.locals.activity, reason: 'server_error', email: req.body && req.body.email };
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         client.release();
+    }
+});
+
+// POST /api/auth/reset-password  { token, password } — consumes an admin-issued link
+router.post('/reset-password', async (req, res) => {
+    const { token, password } = req.body || {};
+    if (typeof token !== 'string' || typeof password !== 'string' || password.length < 8) {
+        res.locals.activity = { reason: 'reset_invalid_input' };
+        return res.status(400).json({ error: 'A token and a password of at least 8 characters are required' });
+    }
+    try {
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const passwordHash = await bcrypt.hash(password, 10);
+        // One statement: claim the token, then set the password for its user.
+        const result = await pool.query(
+            `WITH claimed AS (
+                 UPDATE password_resets SET used_at = now()
+                 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+                 RETURNING user_id
+             )
+             UPDATE users SET password_hash = $2, active_sessions = 0
+             WHERE id IN (SELECT user_id FROM claimed) RETURNING id, email`,
+            [tokenHash, passwordHash]
+        );
+        if (result.rows.length === 0) {
+            res.locals.activity = { reason: 'reset_invalid_token' };
+            return res.status(400).json({ error: 'This reset link is invalid or has expired' });
+        }
+        res.locals.activity = { reason: 'reset_success', userId: result.rows[0].id, email: result.rows[0].email };
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[AUTH RESET] Error:', err.message);
+        logServerError(res, err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
 
@@ -140,6 +178,7 @@ router.post('/logout', authenticateToken, async (req, res) => {
         res.json({ success: true, message: 'Logged out successfully' });
     } catch (err) {
         console.error('[AUTH LOGOUT] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
@@ -159,6 +198,7 @@ router.get('/me', authenticateToken, async (req, res) => {
         res.json({ success: true, user: result.rows[0] });
     } catch (err) {
         console.error('[AUTH ME] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });

@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 /**
  * POST /api/comments
@@ -80,6 +81,7 @@ router.post('/comments', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[COMMENTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -158,6 +160,7 @@ router.get('/comments', async (req, res) => {
         });
     } catch (err) {
         console.error('[COMMENTS GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -219,6 +222,7 @@ router.post('/comments/check', async (req, res) => {
         });
     } catch (err) {
         console.error('[COMMENTS CHECK] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -247,6 +251,7 @@ router.post('/comments/log', async (req, res) => {
         res.json({ success: true, log: result.rows[0] });
     } catch (err) {
         console.error('[COMMENTS LOG] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -281,6 +286,7 @@ router.get('/comments/logs', async (req, res) => {
         });
     } catch (err) {
         console.error('[COMMENTS LOG GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

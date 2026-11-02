@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 router.get('/health', async (req, res) => {
     try {
@@ -15,6 +16,7 @@ router.get('/health', async (req, res) => {
             VersionNumber: '8.2.1',
         });
     } catch (err) {
+        logServerError(res, err);
         res.status(500).json({
             status: 'error',
             database: 'disconnected',

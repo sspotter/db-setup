@@ -14,6 +14,7 @@ const commentsRoutes = require('./routes/comments');
 const scrapeRoutes = require('./routes/scrape');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const adminInsightsRoutes = require('./routes/adminInsights');
 const projectsRoutes = require('./routes/projects');
 const authenticateToken = require('./middleware/auth');
 const { activityLog, startRetention } = require('./middleware/activityLog');
@@ -32,6 +33,7 @@ app.use(express.static('public')); // Serve static admin UI
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin', adminInsightsRoutes);
 
 // Protected routes (requires JWT)
 app.use('/api', authenticateToken, usersRoutes);

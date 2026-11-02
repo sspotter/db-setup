@@ -1,17 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const pool = require('../db');
-
-// Basic middleware to ensure you can add an admin token later if needed
-const verifyAdmin = (req, res, next) => {
-    const adminPassword = req.headers['x-admin-password'];
-    
-    if (!adminPassword || adminPassword !== process.env.ADMIN_PASSWORD) {
-        return res.status(401).json({ error: 'Unauthorized: Invalid administrative password' });
-    }
-    next();
-};
+const verifyAdmin = require('../middleware/adminAuth');
+const { logServerError } = require('../middleware/activityLog');
 
 // POST /api/admin/login
 router.post('/login', (req, res) => {
@@ -29,8 +22,10 @@ router.post('/login', (req, res) => {
 router.get('/users', verifyAdmin, async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT u.id, u.email, u.status, u.plan, u.active_sessions, u.max_devices, u.last_login, u.created_at,
-                    li.last_issue, ev.ext_version
+            `SELECT u.id, u.email, u.status, u.plan, u.active_sessions, u.max_devices, u.last_login, u.last_seen, u.created_at,
+                    li.last_issue, ev.ext_version, rl.recent_logins,
+                    GREATEST(0, COALESCE(u.active_sessions, 0) - rl.recent_logins) AS ghost_sessions,
+                    pr.reset_link
              FROM users u
              LEFT JOIN LATERAL (
                  SELECT json_build_object('reason', e.reason, 'status', e.status, 'path', e.path,
@@ -45,11 +40,28 @@ router.get('/users', verifyAdmin, async (req, res) => {
                  WHERE e.reason = 'success' AND (e.user_id = u.id OR lower(e.email) = lower(u.email))
                  ORDER BY e.created_at DESC LIMIT 1
              ) ev ON true
+             -- JWTs last 7 d (config/jwt.js), so a session older than that cannot still be live.
+             LEFT JOIN LATERAL (
+                 SELECT count(*)::int AS recent_logins
+                 FROM api_events e
+                 WHERE e.reason = 'success' AND e.created_at >= now() - interval '7 days'
+                   AND (e.user_id = u.id OR lower(e.email) = lower(u.email))
+             ) rl ON true
+             LEFT JOIN LATERAL (
+                 SELECT json_build_object('created_at', r.created_at, 'expires_at', r.expires_at,
+                        'status', CASE WHEN r.used_at IS NOT NULL THEN 'used'
+                                       WHEN r.expires_at <= now() THEN 'expired'
+                                       ELSE 'pending' END) AS reset_link
+                 FROM password_resets r
+                 WHERE r.user_id = u.id
+                 ORDER BY r.created_at DESC LIMIT 1
+             ) pr ON true
              ORDER BY u.created_at DESC`
         );
         res.json({ success: true, users: result.rows });
     } catch (err) {
         console.error('[ADMIN GET USERS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
@@ -101,7 +113,7 @@ router.get('/events', verifyAdmin, async (req, res) => {
 
         const [events, stats] = await Promise.all([
             pool.query(
-                `SELECT id, created_at, user_id, email, method, path, status, reason, error, ip, user_agent, ext_version
+                `SELECT id, created_at, user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error
                  FROM api_events
                  ${whereSql}
                  ORDER BY created_at DESC
@@ -120,9 +132,10 @@ router.get('/events', verifyAdmin, async (req, res) => {
                 [...values, todayStart]
             ),
         ]);
-        res.json({ success: true, events: events.rows, stats: stats.rows[0] });
+        res.json({ success: true, events: events.rows, stats: stats.rows[0], slow_ms: parseInt(process.env.SLOW_REQUEST_MS, 10) || 2000 });
     } catch (err) {
         console.error('[ADMIN GET EVENTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
@@ -159,6 +172,7 @@ router.post('/users', verifyAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error('[ADMIN CREATE USER] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         client.release();
@@ -221,6 +235,7 @@ router.put('/users/:id', verifyAdmin, async (req, res) => {
         });
     } catch (err) {
         console.error('[ADMIN UPDATE USER] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     } finally {
         client.release();
@@ -243,6 +258,44 @@ router.post('/users/:id/logout', verifyAdmin, async (req, res) => {
         res.json({ success: true, message: 'User forced logged out successfully' });
     } catch (err) {
         console.error('[ADMIN LOGOUT USER] Error:', err.message);
+        logServerError(res, err);
+        res.status(500).json({ success: false, error: 'Internal server error' });
+    }
+});
+
+// POST /api/admin/users/:id/reset-link
+// Issues a single-use 24h link (one per RESET_BASE_URLS entry, comma-separated) and
+// voids any earlier unused ones. The raw token is returned once; only its hash is stored.
+const RESET_TTL_HOURS = 24;
+router.post('/users/:id/reset-link', verifyAdmin, async (req, res) => {
+    try {
+        const bases = (process.env.RESET_BASE_URLS || '').split(',').map(b => b.trim().replace(/\/+$/, '')).filter(Boolean);
+        if (bases.length === 0) {
+            return res.status(500).json({ success: false, error: 'RESET_BASE_URLS is not configured' });
+        }
+        const user = await pool.query('SELECT id, email FROM users WHERE id = $1', [req.params.id]);
+        if (user.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        await pool.query('DELETE FROM password_resets WHERE user_id = $1 AND used_at IS NULL', [user.rows[0].id]);
+        const saved = await pool.query(
+            `INSERT INTO password_resets (token_hash, user_id, expires_at)
+             VALUES ($1, $2, now() + make_interval(hours => $3)) RETURNING expires_at`,
+            [tokenHash, user.rows[0].id, RESET_TTL_HOURS]
+        );
+
+        res.json({
+            success: true,
+            email: user.rows[0].email,
+            expires_at: saved.rows[0].expires_at,
+            links: bases.map(b => `${b}/reset.html?token=${token}`),
+        });
+    } catch (err) {
+        console.error('[ADMIN RESET LINK] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });
@@ -260,6 +313,7 @@ router.delete('/users/:id', verifyAdmin, async (req, res) => {
         res.json({ success: true, message: 'User deleted successfully', id: result.rows[0].id });
     } catch (err) {
         console.error('[ADMIN DELETE USER] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: 'Internal server error' });
     }
 });

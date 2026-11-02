@@ -74,3 +74,49 @@ describe('GET /api/admin/events', () => {
         expect(pool.query).not.toHaveBeenCalled();
     });
 });
+
+describe('POST /api/admin/users/:id/reset-link', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        process.env.RESET_BASE_URLS = 'https://a.example:8443/, https://b.example';
+    });
+
+    it('stores only the token hash and returns one link per base URL', async () => {
+        pool.query
+            .mockResolvedValueOnce({ rows: [{ id: 'u1', email: 'bob@x.com' }] }) // user lookup
+            .mockResolvedValueOnce({ rows: [] })                                  // void old links
+            .mockResolvedValueOnce({ rows: [{ expires_at: '2026-10-31T00:00:00Z' }] });
+
+        const res = await request(app).post('/api/admin/users/u1/reset-link').set('x-admin-password', 'admin-test');
+
+        expect(res.status).toBe(200);
+        expect(res.body.links).toHaveLength(2);
+        const token = res.body.links[0].split('token=')[1];
+        expect(res.body.links[0]).toMatch(/^https:\/\/a\.example:8443\/reset\.html\?token=[0-9a-f]{64}$/);
+        expect(res.body.links[1].startsWith('https://b.example/reset.html?')).toBe(true);
+        const storedHash = pool.query.mock.calls[2][1][0];
+        expect(storedHash).not.toBe(token);
+        expect(storedHash).toHaveLength(64);
+    });
+
+    it('404s for an unknown user and 401s without the admin password', async () => {
+        pool.query.mockResolvedValueOnce({ rows: [] });
+        expect((await request(app).post('/api/admin/users/nope/reset-link').set('x-admin-password', 'admin-test')).status).toBe(404);
+        expect((await request(app).post('/api/admin/users/u1/reset-link')).status).toBe(401);
+    });
+});
+
+describe('GET /api/admin/users diagnostics', () => {
+    beforeEach(() => { jest.clearAllMocks(); pool.query.mockResolvedValue({ rows: [] }); });
+
+    it('selects ghost sessions, last_seen and the latest reset link', async () => {
+        const res = await request(app).get('/api/admin/users').set('x-admin-password', 'admin-test');
+
+        expect(res.status).toBe(200);
+        const [sql] = pool.query.mock.calls[0];
+        expect(sql).toContain('GREATEST(0, COALESCE(u.active_sessions, 0) - rl.recent_logins) AS ghost_sessions');
+        expect(sql).toContain('u.last_seen');
+        expect(sql).toContain('FROM password_resets r');
+        expect(sql).toContain("interval '7 days'");
+    });
+});
