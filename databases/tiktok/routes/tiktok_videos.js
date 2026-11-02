@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { checkProjectOwnership, checkKeywordOwnership, getOwnedKeyword } = require('../utils/ownership');
 const { syncHiddenAcrossTables } = require('../utils/videoSync');
 
@@ -50,6 +51,7 @@ router.get('/tiktok/videos/hidden', async (req, res) => {
         res.json({ success: true, videos: result.rows });
     } catch (err) {
         console.error('[TIKTOK_VIDEOS HIDDEN] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -78,6 +80,7 @@ router.get('/tiktok/videos', async (req, res) => {
         res.json({ success: true, videos: result.rows });
     } catch (err) {
         console.error('[TIKTOK_VIDEOS GET] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -205,6 +208,7 @@ router.post('/tiktok/videos/batch', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[TIKTOK_VIDEOS BATCH] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -291,6 +295,7 @@ router.patch('/tiktok/videos/:video_id/qualify', async (req, res) => {
         res.json({ success: true, video: result.rows[0] });
     } catch (err) {
         console.error('[TIKTOK_VIDEOS QUALIFY] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -440,6 +445,7 @@ router.get('/keywords/:id/analytics', async (req, res) => {
         });
     } catch (err) {
         console.error('[ANALYTICS] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -478,6 +484,7 @@ router.delete('/tiktok/videos/:video_id', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('[TIKTOK_VIDEOS DELETE] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

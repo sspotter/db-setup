@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { checkProjectOwnership, checkScrapeJobOwnership } = require('../utils/ownership');
 
 /**
@@ -70,6 +71,7 @@ router.post('/scrape/sessions', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[SCRAPE SESSION] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -121,6 +123,7 @@ router.get('/scrape/sessions/:id', async (req, res) => {
         });
     } catch (err) {
         console.error('[SCRAPE SESSION GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -160,6 +163,7 @@ router.get('/scrape/sessions', async (req, res) => {
         });
     } catch (err) {
         console.error('[SCRAPE SESSIONS LIST] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -191,6 +195,7 @@ router.get('/scrape/sessions/:id/next-job', async (req, res) => {
         });
     } catch (err) {
         console.error('[SCRAPE NEXT JOB] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -323,6 +328,7 @@ router.patch('/scrape/jobs/:id', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[SCRAPE JOB PATCH] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -379,6 +385,7 @@ router.post('/scrape/sessions/:id/resume', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[SCRAPE RESUME] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -405,6 +412,7 @@ router.post('/scrape/sessions/:id/pause', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('[SCRAPE PAUSE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

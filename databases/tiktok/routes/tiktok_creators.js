@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 /**
  * GET /api/tiktok/creators?keyword_id=...
@@ -22,6 +23,7 @@ router.get('/tiktok/creators', async (req, res) => {
         res.json({ success: true, creators: result.rows });
     } catch (err) {
         console.error('[TIKTOK_CREATORS GET] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

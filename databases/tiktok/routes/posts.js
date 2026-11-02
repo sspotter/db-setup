@@ -5,6 +5,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { syncHiddenAcrossTables } = require('../utils/videoSync');
 
 /**
@@ -303,6 +304,7 @@ router.post('/posts', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[POSTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -406,6 +408,7 @@ router.get('/posts', async (req, res) => {
         });
     } catch (err) {
         console.error('[POSTS GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -437,6 +440,7 @@ router.get('/posts/hidden', async (req, res) => {
         res.json({ success: true, posts: result.rows });
     } catch (err) {
         console.error('[POSTS HIDDEN GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -493,6 +497,7 @@ router.patch('/posts/:shortcode/hide', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[POSTS HIDE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -541,6 +546,7 @@ router.delete('/posts/:shortcode', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[POSTS DELETE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -571,6 +577,7 @@ router.get('/posts/:shortcode/history', async (req, res) => {
         });
     } catch (err) {
         console.error('[HISTORY] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

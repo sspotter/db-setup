@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 const { checkProjectOwnership, checkSessionOwnership } = require('../utils/ownership');
 
 /** Normalize hashtag slug: strip #, lowercase, remove spaces */
@@ -66,6 +67,7 @@ router.get('/keywords', async (req, res) => {
         res.json({ success: true, keywords: result.rows });
     } catch (err) {
         console.error('[KEYWORDS GET] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -112,6 +114,7 @@ router.post('/keywords', async (req, res) => {
         res.json({ success: true, keyword: result.rows[0] });
     } catch (err) {
         console.error('[KEYWORDS POST] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -166,6 +169,7 @@ router.post('/keywords/resolve-hashtag', async (req, res) => {
         });
     } catch (err) {
         console.error('[KEYWORDS resolve-hashtag] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -194,6 +198,7 @@ router.get('/keywords/:id', async (req, res) => {
         res.json({ success: true, keyword: result.rows[0] });
     } catch (err) {
         console.error('[KEYWORDS GET/:id] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -216,6 +221,7 @@ router.delete('/keywords/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('[KEYWORDS DELETE] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -241,6 +247,7 @@ router.get('/keywords/:id/sessions', async (req, res) => {
         res.json({ success: true, sessions: result.rows });
     } catch (err) {
         console.error('[SESSIONS GET] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -269,6 +276,7 @@ router.post('/keywords/:id/sessions', async (req, res) => {
         res.json({ success: true, session: result.rows[0] });
     } catch (err) {
         console.error('[SESSIONS POST] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -317,6 +325,7 @@ router.patch('/keywords/:id/sessions/:sid', async (req, res) => {
         res.json({ success: true, session: result.rows[0] });
     } catch (err) {
         console.error('[SESSIONS PATCH] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

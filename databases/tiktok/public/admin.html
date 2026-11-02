@@ -37,10 +37,12 @@
         <header class="glass-header">
             <div class="header-left">
                 <div class="logo-icon"></div>
-                <h1>Insta Surfer <span>Admin</span></h1>
+                <h1>TIK Surfer <span>Admin</span></h1>
             </div>
             <button id="add-user-btn" class="btn primary-btn">+ Add User</button>
         </header>
+
+        <div id="alerts-banner" class="alert-banner hidden"></div>
 
         <section class="users-section glass-panel">
             <div class="panel-header">
@@ -71,6 +73,25 @@
             </div>
             <div id="loading" class="loading-spinner"></div>
             <div id="error-message" class="error-message hidden"></div>
+        </section>
+
+        <section class="insights-section glass-panel">
+            <div class="panel-header">
+                <h2>Insights</h2>
+                <select id="insights-days">
+                    <option value="1">Last 24 hours</option>
+                    <option value="7" selected>Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
+            </div>
+            <div id="health-card" class="insights-grid"></div>
+            <div class="insights-grid">
+                <div><h3>Extension versions</h3><div id="versions-table"></div></div>
+                <div><h3>Top failing endpoints</h3><div id="failing-table"></div></div>
+                <div><h3>Slow endpoints</h3><div id="slow-table"></div></div>
+                <div><h3>Errors per day</h3><div id="trend-bars"></div></div>
+            </div>
+            <div id="insights-error" class="error-message hidden"></div>
         </section>
 
         <section class="activity-section glass-panel">
@@ -233,6 +254,23 @@
             <div class="form-actions">
                 <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
                 <button type="button" id="confirm-logout-btn" class="btn primary-btn">Force Logout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset Link Modal -->
+    <div id="reset-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel">
+            <div class="modal-header">
+                <h3>Password reset link</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Send one of these to <strong id="reset-user-email"></strong>. Single use, expires <span id="reset-expires"></span>. Generating a new link voids older ones.</p>
+                <div id="reset-links"></div>
+            </div>
+            <div class="form-actions">
+                <button type="button" class="btn secondary-btn close-modal-btn">Close</button>
             </div>
         </div>
     </div>

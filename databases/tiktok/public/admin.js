@@ -58,9 +58,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Activity feed state
     let activityEvents = [];
     let activityStats = { all_time: 0, today: 0, matching: 0, failed: 0, distinct_users: 0 };
+    let activitySlowMs = 2000; // overwritten by the server's SLOW_REQUEST_MS on each fetch
     const appliedFilters = { q: '', user: '', action: 'all', result: 'any', when: 'any' };
     const expandedEventIds = new Set();
     let autoRefreshTimer = null;
+    let insightsTimer = null; // declared here: checkAuth() runs once before the insights block below is evaluated
     let fetchSeq = 0;
 
     // Authentication Elements
@@ -81,12 +83,14 @@ document.addEventListener('DOMContentLoaded', () => {
             await fetchUsers();
             if (!sessionStorage.getItem('adminPassword')) return; // fetchUsers hit a 401 and logged us out
             fetchActivity();
+            startInsightsRefresh();
             activityAutoRefreshToggle.checked = getAutoRefreshPref();
             if (activityAutoRefreshToggle.checked) startAutoRefresh(); else stopAutoRefresh();
         } else {
             loginOverlay.classList.remove('hidden');
             adminContainer.classList.add('blurred');
             stopAutoRefresh();
+            if (insightsTimer) { clearInterval(insightsTimer); insightsTimer = null; }
         }
     }
 
@@ -422,6 +426,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             activityEvents = data.events || [];
             activityStats = data.stats || activityStats;
+            activitySlowMs = data.slow_ms || activitySlowMs;
             activityError.classList.add('hidden'); // clear a stale error left by an earlier failed tick
             renderActivityStats();
             renderFeed(activityFeedEl, activityEvents, activityStats.matching);
@@ -525,7 +530,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return { label: `HTTP ${status}`, cls: 'badge-danger' }; // other 4xx (405/409/429/…)
     }
 
+    // reasons set outside the login route (admin auth failures, password reset)
+    const OTHER_REASONS = {
+        bad_admin_password: { label: 'Bad admin password', cls: 'badge-danger', sentence: 'Admin API call rejected — wrong admin password' },
+        missing_admin_password: { label: 'No admin password', cls: 'badge-warning', sentence: 'Admin API call rejected — no admin password sent' },
+        reset_success: { label: 'Password reset', cls: 'badge-success', sentence: 'Password reset via link' },
+        reset_invalid_token: { label: 'Bad reset link', cls: 'badge-warning', sentence: 'Password reset failed — link invalid, used or expired' },
+        reset_invalid_input: { label: 'Bad request', cls: 'badge-warning', sentence: 'Password reset failed — token or password missing/too short' },
+    };
+
     function badgeFor(ev) {
+        if (OTHER_REASONS[ev.reason]) return OTHER_REASONS[ev.reason];
+        if (ev.status < 400 && ev.duration_ms >= activitySlowMs && ev.path !== '/api/auth/login') {
+            return { label: 'Slow', cls: 'badge-warning', sentence: `${ev.method || ''} ${ev.path || ''} took ${ev.duration_ms} ms` };
+        }
         if (ev.path === '/api/auth/login') {
             const b = loginBadge(ev.reason, ev.error);
             if (b) return b;
@@ -599,6 +617,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="activity-detail"><span class="detail-label">Method + Path</span><span class="detail-value">${esc(ev.method || '')} ${esc(ev.path || '')}</span></div>
                         <div class="activity-detail"><span class="detail-label">Status</span><span class="detail-value">${esc(ev.status)}</span></div>
                         <div class="activity-detail"><span class="detail-label">Reason</span><span class="detail-value">${esc(ev.reason || '—')}</span></div>
+                        <div class="activity-detail"><span class="detail-label">Duration</span><span class="detail-value">${esc(ev.duration_ms !== null && ev.duration_ms !== undefined ? ev.duration_ms + ' ms' : '—')}</span></div>
+                        <div class="activity-detail activity-detail-full"><span class="detail-label">Server error</span><span class="detail-value">${esc(ev.server_error || '—')}</span></div>
                         <div class="activity-detail activity-detail-full"><span class="detail-label">Error</span><span class="detail-value">${esc(ev.error || '—')}</span></div>
                         <div class="activity-detail"><span class="detail-label">IP</span><span class="detail-value">${esc(ev.ip || '—')}</span></div>
                         <div class="activity-detail activity-detail-full"><span class="detail-label">Browser</span><span class="detail-value">${esc(ev.user_agent || '—')}</span></div>
@@ -696,7 +716,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function downloadCSV(events) {
-        const header = ['created_at', 'email', 'method', 'path', 'status', 'reason', 'error', 'ip', 'user_agent', 'ext_version', 'user_id', 'id'];
+        const header = ['created_at', 'email', 'method', 'path', 'status', 'reason', 'error', 'ip', 'user_agent', 'ext_version', 'duration_ms', 'server_error', 'user_id', 'id'];
         const rows = [header.join(',')];
         events.forEach(ev => rows.push(header.map(k => csvCell(ev[k])).join(',')));
         const csv = rows.join('\r\n');
@@ -735,18 +755,116 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function renderLastIssue(issue) {
-        if (!issue) return '<span style="color:var(--text-secondary)">—</span>';
+    // ---- Insights, health, alerts ----
+    const insightsDays = document.getElementById('insights-days');
+    const alertsBanner = document.getElementById('alerts-banner');
+
+    const miniTable = (head, rows) => rows.length
+        ? `<table class="mini-table"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+        : '<div class="last-good">Nothing in this window.</div>';
+
+    function renderHealth(h) {
+        const dbOk = h.db && h.db.ok;
+        const mig = h.migrations || {};
+        const missing = Object.keys(mig).filter(k => !mig[k]);
+        const r = h.retention || {};
+        const up = h.uptime_s >= 86400 ? `${Math.floor(h.uptime_s / 86400)}d ${Math.floor(h.uptime_s % 86400 / 3600)}h` : `${Math.floor(h.uptime_s / 3600)}h ${Math.floor(h.uptime_s % 3600 / 60)}m`;
+        const cell = (label, value, cls) => `<div class="health-cell"><div class="last-good">${label}</div><div class="${cls || ''}">${value}</div></div>`;
+        document.getElementById('health-card').innerHTML = [
+            cell('Database', dbOk ? `OK · ${h.db.latency_ms} ms` : `DOWN — ${escapeHTML((h.db && h.db.error) || '')}`, dbOk ? 'health-ok' : 'health-bad'),
+            cell('Backend', `v${escapeHTML(h.version)} · node ${escapeHTML(h.node)} · up ${up}`),
+            cell('Migrations', missing.length ? `missing: ${escapeHTML(missing.join(', '))}` : 'all applied', missing.length ? 'health-bad' : 'health-ok'),
+            cell('Activity log', h.events ? `${h.events.total} rows · oldest ${h.events.oldest ? escapeHTML(new Date(h.events.oldest).toLocaleDateString()) : '—'}` : '—'),
+            cell('Retention', r.lastError ? `failed: ${escapeHTML(r.lastError)}` : r.lastRunAt ? `ran ${escapeHTML(relativeTime(r.lastRunAt))}, removed ${r.lastDeleted}` : 'not run yet since boot', r.lastError ? 'health-bad' : ''),
+        ].join('');
+    }
+
+    function renderInsights(d) {
+        document.getElementById('versions-table').innerHTML = miniTable(
+            ['Version', 'Users', 'Errors', 'Who'],
+            d.versions.map(v => [
+                `${escapeHTML(v.ext_version)}${v.outdated ? ' <span class="badge badge-warning">outdated</span>' : ' <span class="badge badge-success">latest</span>'}`,
+                v.users, v.errors,
+                `<span class="last-good" title="${escapeHTML((v.emails || []).join(', '))}">${escapeHTML((v.emails || []).slice(0, 2).join(', '))}${(v.emails || []).length > 2 ? '…' : ''}</span>`,
+            ]));
+        document.getElementById('failing-table').innerHTML = miniTable(
+            ['Endpoint', 'Failures', '5xx', 'Last'],
+            d.top_failing.map(f => [`${escapeHTML(f.method)} ${escapeHTML(f.path)}`, f.failures, f.server_errors, escapeHTML(relativeTime(f.last_seen))]));
+        document.getElementById('slow-table').innerHTML = miniTable(
+            [`Endpoint (≥ ${d.slow_ms} ms)`, 'Slow hits', 'Avg ms', 'Max ms'],
+            d.slow.map(s => [`${escapeHTML(s.method)} ${escapeHTML(s.path)}`, s.slow, s.avg_ms, s.max_ms]));
+        const peak = Math.max(1, ...d.trend.map(t => t.errors + t.client_errors));
+        document.getElementById('trend-bars').innerHTML = d.trend.length
+            ? d.trend.map(t => `<div class="trend-row" title="${t.errors} server / ${t.client_errors} client errors">
+                    <span class="last-good">${escapeHTML(new Date(t.day).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }))}</span>
+                    <span class="trend-bar"><i class="trend-5xx" style="width:${t.errors / peak * 100}%"></i><i class="trend-4xx" style="width:${t.client_errors / peak * 100}%"></i></span>
+                    <span class="last-good">${t.errors} / ${t.client_errors}</span></div>`).join('')
+            : '<div class="last-good">No errors in this window.</div>';
+    }
+
+    function renderAlerts(alerts) {
+        alertsBanner.classList.toggle('hidden', alerts.length === 0);
+        alertsBanner.innerHTML = alerts.map(a => `<div>⚠ ${escapeHTML(a.message)}</div>`).join('');
+    }
+
+    async function adminGet(url) {
+        const res = await fetch(url, { headers: getHeaders() });
+        if (res.status === 401) { sessionStorage.removeItem('adminPassword'); checkAuth(); throw new Error('Signed out'); }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+        return data;
+    }
+
+    async function fetchAlerts() {
+        try { renderAlerts((await adminGet('/api/admin/alerts')).alerts); } catch (e) { /* banner is best-effort */ }
+    }
+
+    async function fetchInsights() {
+        const err = document.getElementById('insights-error');
+        try {
+            err.classList.add('hidden');
+            const [h, d] = await Promise.all([
+                adminGet('/api/admin/health'),
+                adminGet(`/api/admin/insights?days=${encodeURIComponent(insightsDays.value)}`),
+            ]);
+            renderHealth(h);
+            renderInsights(d);
+        } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove('hidden');
+        }
+    }
+
+    function startInsightsRefresh() {
+        if (insightsTimer) clearInterval(insightsTimer);
+        fetchInsights();
+        fetchAlerts();
+        insightsTimer = setInterval(() => {
+            if (!sessionStorage.getItem('adminPassword')) return;
+            fetchAlerts();
+            fetchInsights();
+        }, 60000);
+    }
+    insightsDays.addEventListener('change', fetchInsights);
+
+    function renderLastIssue(issue, lastSeen) {
+        const good = lastSeen
+            ? `<div class="last-good" title="${escapeHTML(new Date(lastSeen).toLocaleString())}">last good call · ${escapeHTML(relativeTime(lastSeen))}</div>`
+            : '<div class="last-good">no good call recorded</div>';
+        if (!issue) return `<span style="color:var(--text-secondary)">—</span>${good}`;
 
         const label = escapeHTML(issue.reason || String(issue.status));
         const rel = relativeTime(issue.created_at);
         const isRecent = issue.created_at && (Date.now() - new Date(issue.created_at).getTime()) < 24 * 60 * 60 * 1000;
+        // Newer than the last good call (or no good call at all) = the problem is still happening.
+        const ongoing = issue.created_at && (!lastSeen || new Date(issue.created_at) > new Date(lastSeen));
         const titleParts = [];
         if (issue.path) titleParts.push(issue.path);
         if (issue.error) titleParts.push(issue.error);
         const titleAttr = escapeHTML(titleParts.join(' — '));
 
-        return `<span class="last-issue${isRecent ? ' last-issue-recent' : ''}" title="${titleAttr}">${label} · ${escapeHTML(rel)}</span>`;
+        return `<span class="last-issue${isRecent ? ' last-issue-recent' : ''}" title="${titleAttr}">${label} · ${escapeHTML(rel)}</span>`
+            + `${ongoing ? ' <span class="badge badge-danger">ongoing</span>' : ''}${good}`;
     }
 
     // `long` gives the activity feed's "20 min ago" phrasing; the default short form
@@ -801,6 +919,32 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Flags sessions the counter still holds that no recent login can explain (see GET /users).
+    function ghostFlag(user) {
+        if (!user.ghost_sessions) return '';
+        return ` <button type="button" class="ghost-flag" data-id="${user.id}" data-email="${escapeHTML(user.email)}" `
+            + `title="${user.ghost_sessions} session(s) with no login in the last 7 days — click to reset to 0">⚠ ${user.ghost_sessions} ghost · reset</button>`;
+    }
+
+    // One click: reuse the existing force-logout endpoint, no confirmation.
+    async function resetGhostSessions(id, email) {
+        try {
+            const res = await fetch(`/api/admin/users/${id}/logout`, { method: 'POST', headers: getHeaders() });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Reset failed');
+            showToast(`Sessions reset for ${email}`);
+            fetchUsers();
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+
+    function resetChip(link) {
+        if (!link) return '';
+        const cls = link.status === 'pending' ? 'badge-warning' : link.status === 'used' ? 'badge-success' : 'badge-grey';
+        return `<div class="reset-chip"><span class="badge ${cls}">reset link ${escapeHTML(link.status)}</span> ${escapeHTML(relativeTime(link.created_at))}</div>`;
+    }
+
     function renderUsers(users) {
         usersTbody.innerHTML = '';
 
@@ -827,16 +971,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>
                     <strong>${escapeHTML(user.email)}</strong>
                     ${extVersionHtml}
+                    ${resetChip(user.reset_link)}
                 </td>
                 <td><span class="plan-text">${escapeHTML(user.plan)}</span></td>
                 <td><span class="badge status-${user.status}">${escapeHTML(user.status)}</span></td>
-                <td>${user.active_sessions || 0} / ${user.max_devices}</td>
+                <td>${user.active_sessions || 0} / ${user.max_devices}${ghostFlag(user)}</td>
                 <td>${lastLoginLocale}</td>
-                <td>${renderLastIssue(user.last_issue)}</td>
+                <td>${renderLastIssue(user.last_issue, user.last_seen)}</td>
                 <td>${createdAtLocale}</td>
                 <td>
                     <button class="action-btn history" data-email="${escapeHTML(user.email)}" title="View history">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                    </button>
+                    <button class="action-btn reset" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Generate password reset link">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
                     </button>
                     <button class="action-btn edit" data-id="${user.id}" title="Edit user">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
@@ -856,6 +1004,13 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 const email = e.currentTarget.getAttribute('data-email');
                 openHistoryModal(email);
+            });
+        });
+
+        document.querySelectorAll('.action-btn.reset').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const t = e.currentTarget;
+                generateResetLink(t.getAttribute('data-id'), t.getAttribute('data-email'));
             });
         });
 
@@ -885,6 +1040,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 promptLogoutUser(id, email);
             });
         });
+
+        document.querySelectorAll('.ghost-flag').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const t = e.currentTarget;
+                resetGhostSessions(t.getAttribute('data-id'), t.getAttribute('data-email'));
+            });
+        });
     }
 
     function promptEditUser(user) {
@@ -902,6 +1064,35 @@ document.addEventListener('DOMContentLoaded', () => {
         addUserForm.querySelector('.submit-btn').textContent = 'Save Changes';
         
         openModal(addUserModal);
+    }
+
+    async function generateResetLink(id, email) {
+        try {
+            const res = await fetch(`/api/admin/users/${id}/reset-link`, { method: 'POST', headers: getHeaders() });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to generate link');
+            document.getElementById('reset-user-email').textContent = email;
+            document.getElementById('reset-expires').textContent = new Date(data.expires_at).toLocaleString();
+            const box = document.getElementById('reset-links');
+            box.innerHTML = '';
+            data.links.forEach(link => {
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.readOnly = true;
+                input.value = link;
+                input.style.cssText = 'width:100%;margin:6px 0';
+                input.addEventListener('focus', () => input.select());
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn primary-btn';
+                btn.textContent = 'Copy';
+                btn.addEventListener('click', () => navigator.clipboard.writeText(link).then(() => showToast('Link copied')));
+                box.append(input, btn);
+            });
+            openModal(document.getElementById('reset-modal'));
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
     }
 
     function promptDeleteUser(id, email) {

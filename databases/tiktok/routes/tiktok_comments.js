@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 /**
  * GET /api/tiktok/comments?keyword_id=...
@@ -29,6 +30,7 @@ router.get('/tiktok/comments', async (req, res) => {
         res.json({ success: true, comments: result.rows });
     } catch (err) {
         console.error('[TIKTOK_COMMENTS GET] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -93,6 +95,7 @@ router.post('/tiktok/comments/batch', async (req, res) => {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('[TIKTOK_COMMENTS BATCH] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     } finally {
         client.release();
@@ -125,6 +128,7 @@ router.post('/tiktok/graphql_captures', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('[TIKTOK_GRAPHQL POST] Error:', err);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });

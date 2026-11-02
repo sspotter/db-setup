@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 router.get('/health', async (req, res) => {
     try {
@@ -17,6 +18,7 @@ router.get('/health', async (req, res) => {
             serverTime: result.rows[0].server_time,
         }) + '\n');
     } catch (err) {
+        logServerError(res, err);
         res.status(500).type('json').send(JSON.stringify({
             status: 'error',
             database: 'disconnected',

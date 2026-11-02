@@ -4,6 +4,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { logServerError } = require('../middleware/activityLog');
 
 // ======================== Helper: Ownership Check ========================
 
@@ -173,6 +174,7 @@ router.post('/projects', async (req, res) => {
         res.status(201).json({ success: true, project: result.rows[0] });
     } catch (err) {
         console.error('[PROJECTS CREATE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -203,6 +205,7 @@ router.get('/projects', async (req, res) => {
         res.json({ success: true, projects: result.rows });
     } catch (err) {
         console.error('[PROJECTS LIST] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -239,6 +242,7 @@ router.get('/projects/:id', async (req, res) => {
         });
     } catch (err) {
         console.error('[PROJECTS GET] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -287,6 +291,7 @@ router.put('/projects/:id', async (req, res) => {
         res.json({ success: true, project: result.rows[0] });
     } catch (err) {
         console.error('[PROJECTS UPDATE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -311,6 +316,7 @@ router.delete('/projects/:id', async (req, res) => {
         res.json({ success: true, message: `Project "${result.rows[0].name}" deleted`, id: result.rows[0].id });
     } catch (err) {
         console.error('[PROJECTS DELETE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -346,6 +352,7 @@ router.get('/projects/:id/profiles', async (req, res) => {
         res.json({ success: true, profiles: result.rows });
     } catch (err) {
         console.error('[PROJECT PROFILES] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -387,6 +394,7 @@ router.put('/projects/:id/profiles/:username', async (req, res) => {
         res.json({ success: true, profile: result.rows[0] });
     } catch (err) {
         console.error('[PROJECT PROFILE ROLE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -418,6 +426,7 @@ router.patch('/projects/:id/profiles/:username/pin', async (req, res) => {
         res.json({ success: true, profile: result.rows[0], pinned: result.rows[0].pinned });
     } catch (err) {
         console.error('[PROJECT PROFILE PIN] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -447,6 +456,7 @@ router.delete('/projects/:id/profiles/:username', async (req, res) => {
         res.json({ success: true, message: `Profile @${username} removed from project` });
     } catch (err) {
         console.error('[PROJECT PROFILE REMOVE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -561,6 +571,7 @@ router.get('/projects/:id/posts', async (req, res) => {
         });
     } catch (err) {
         console.error('[PROJECT POSTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -611,6 +622,7 @@ router.get('/projects/:id/stats', async (req, res) => {
         });
     } catch (err) {
         console.error('[PROJECT STATS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -767,6 +779,7 @@ router.get('/projects/:id/compare', async (req, res) => {
         res.json({ success: true, brand, competitors: competitorList, profiles });
     } catch (err) {
         console.error('[PROJECT COMPARE] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -864,6 +877,7 @@ router.get('/projects/:id/timeseries', async (req, res) => {
         res.json({ success: true, interval: truncInterval, usernames: allUsernames, timeseries });
     } catch (err) {
         console.error('[PROJECT TIMESERIES] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -962,6 +976,7 @@ router.get('/projects/:id/top-posts', async (req, res) => {
         res.json({ success: true, topPosts });
     } catch (err) {
         console.error('[PROJECT TOP POSTS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1052,6 +1067,7 @@ router.get('/projects/:id/collaborations', async (req, res) => {
         res.json({ success: true, collaborations });
     } catch (err) {
         console.error('[PROJECT COLLABS] Error:', err.message);
+        logServerError(res, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
