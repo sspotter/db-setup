@@ -99,6 +99,28 @@ describe('POST /api/admin/users/:id/reset-link', () => {
         expect(storedHash).toHaveLength(64);
     });
 
+    it('issues a single link for the chosen base and rejects bases outside the allowlist', async () => {
+        pool.query
+            .mockResolvedValueOnce({ rows: [{ id: 'u1', email: 'bob@x.com' }] })
+            .mockResolvedValueOnce({ rows: [] })
+            .mockResolvedValueOnce({ rows: [{ expires_at: '2026-10-31T00:00:00Z' }] });
+        const ok = await request(app).post('/api/admin/users/u1/reset-link').set('x-admin-password', 'admin-test').send({ base: 'https://b.example/' });
+        expect(ok.status).toBe(200);
+        expect(ok.body.links).toHaveLength(1);
+        expect(ok.body.links[0].startsWith('https://b.example/reset.html?token=')).toBe(true);
+
+        jest.clearAllMocks();
+        const bad = await request(app).post('/api/admin/users/u1/reset-link').set('x-admin-password', 'admin-test').send({ base: 'https://evil.example' });
+        expect(bad.status).toBe(400);
+        expect(pool.query).not.toHaveBeenCalled(); // no token issued, older links not voided
+    });
+
+    it('lists the configured bases for the picker, admin only', async () => {
+        const res = await request(app).get('/api/admin/reset-bases').set('x-admin-password', 'admin-test');
+        expect(res.body.bases).toEqual(['https://a.example:8443', 'https://b.example']);
+        expect((await request(app).get('/api/admin/reset-bases')).status).toBe(401);
+    });
+
     it('404s for an unknown user and 401s without the admin password', async () => {
         pool.query.mockResolvedValueOnce({ rows: [] });
         expect((await request(app).post('/api/admin/users/nope/reset-link').set('x-admin-password', 'admin-test')).status).toBe(404);

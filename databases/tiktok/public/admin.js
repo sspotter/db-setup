@@ -1066,12 +1066,40 @@ document.addEventListener('DOMContentLoaded', () => {
         openModal(addUserModal);
     }
 
+    // Opens the modal and lets the admin pick the connection first; the link is only
+    // issued (voiding older ones) when they press Generate.
     async function generateResetLink(id, email) {
         try {
-            const res = await fetch(`/api/admin/users/${id}/reset-link`, { method: 'POST', headers: getHeaders() });
+            const res = await fetch('/api/admin/reset-bases', { headers: getHeaders() });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to load connections');
+            document.getElementById('reset-user-email').textContent = email;
+            const select = document.getElementById('reset-base');
+            select.innerHTML = '';
+            data.bases.forEach(base => {
+                const opt = document.createElement('option');
+                opt.value = base;
+                opt.textContent = base;
+                select.appendChild(opt);
+            });
+            document.getElementById('reset-result').classList.add('hidden');
+            const genBtn = document.getElementById('reset-generate-btn');
+            genBtn.onclick = () => issueResetLink(id, select.value);
+            openModal(document.getElementById('reset-modal'));
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    }
+
+    async function issueResetLink(id, base) {
+        try {
+            const res = await fetch(`/api/admin/users/${id}/reset-link`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({ base })
+            });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Failed to generate link');
-            document.getElementById('reset-user-email').textContent = email;
             document.getElementById('reset-expires').textContent = new Date(data.expires_at).toLocaleString();
             const box = document.getElementById('reset-links');
             box.innerHTML = '';
@@ -1089,7 +1117,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 btn.addEventListener('click', () => navigator.clipboard.writeText(link).then(() => showToast('Link copied')));
                 box.append(input, btn);
             });
-            openModal(document.getElementById('reset-modal'));
+            document.getElementById('reset-result').classList.remove('hidden');
         } catch (err) {
             showToast(err.message, 'error');
         }

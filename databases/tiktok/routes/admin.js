@@ -267,11 +267,24 @@ router.post('/users/:id/logout', verifyAdmin, async (req, res) => {
 // Issues a single-use 24h link (one per RESET_BASE_URLS entry, comma-separated) and
 // voids any earlier unused ones. The raw token is returned once; only its hash is stored.
 const RESET_TTL_HOURS = 24;
+const resetBases = () => (process.env.RESET_BASE_URLS || '').split(',').map(b => b.trim().replace(/\/+$/, '')).filter(Boolean);
+
+// GET /api/admin/reset-bases — the connections an admin can send a reset link through.
+router.get('/reset-bases', verifyAdmin, (req, res) => res.json({ success: true, bases: resetBases() }));
+
 router.post('/users/:id/reset-link', verifyAdmin, async (req, res) => {
     try {
-        const bases = (process.env.RESET_BASE_URLS || '').split(',').map(b => b.trim().replace(/\/+$/, '')).filter(Boolean);
+        const bases = resetBases();
         if (bases.length === 0) {
             return res.status(500).json({ success: false, error: 'RESET_BASE_URLS is not configured' });
+        }
+        // Optional { base }: issue a link for that one connection only. It must be an
+        // allowlisted entry, so an admin request can't point a link at an arbitrary host.
+        let chosen = bases;
+        if (req.body && req.body.base) {
+            const want = String(req.body.base).trim().replace(/\/+$/, '');
+            if (!bases.includes(want)) return res.status(400).json({ error: 'Unknown reset base URL' });
+            chosen = [want];
         }
         const user = await pool.query('SELECT id, email FROM users WHERE id = $1', [req.params.id]);
         if (user.rows.length === 0) {
@@ -291,7 +304,7 @@ router.post('/users/:id/reset-link', verifyAdmin, async (req, res) => {
             success: true,
             email: user.rows[0].email,
             expires_at: saved.rows[0].expires_at,
-            links: bases.map(b => `${b}/reset.html?token=${token}`),
+            links: chosen.map(b => `${b}/reset.html?token=${token}`),
         });
     } catch (err) {
         console.error('[ADMIN RESET LINK] Error:', err.message);

@@ -266,8 +266,14 @@
                 <button class="close-modal-btn" aria-label="Close modal">&times;</button>
             </div>
             <div class="modal-body">
-                <p>Send one of these to <strong id="reset-user-email"></strong>. Single use, expires <span id="reset-expires"></span>. Generating a new link voids older ones.</p>
-                <div id="reset-links"></div>
+                <p>Create a link for <strong id="reset-user-email"></strong>. Single use, valid 24 hours. Generating a new link voids older ones.</p>
+                <label for="reset-base">Send through</label>
+                <select id="reset-base" style="width:100%;margin:6px 0"></select>
+                <button type="button" id="reset-generate-btn" class="btn primary-btn">Generate link</button>
+                <div id="reset-result" class="hidden">
+                    <p>Expires <span id="reset-expires"></span></p>
+                    <div id="reset-links"></div>
+                </div>
             </div>
             <div class="form-actions">
                 <button type="button" class="btn secondary-btn close-modal-btn">Close</button>
