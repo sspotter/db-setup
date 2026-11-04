@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { platformGuard } = require('../middleware/platformGuard');
 const { toObservedAt, newer, bothUnknown, IG_USERS_FOLLOWERS_SET, LATEST_METRICS_ORDER } = require('../observed');
 
 // Any real Instagram reach is far below this; bigger values are the old
@@ -24,7 +25,7 @@ const MAX_SANE_REACH = 1e10;
  *   4. Upsert coauthors / sponsors / tagged users into ig_users + post_relations
  *   5. If project_id provided, link post + owner to project
  */
-router.post('/posts', async (req, res) => {
+router.post('/posts', platformGuard, async (req, res) => {
     const client = await pool.connect();
 
     try {
