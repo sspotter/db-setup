@@ -42,6 +42,30 @@
             <div id="card-instagram" class="status-card glass-panel"></div>
         </section>
 
+        <section id="db-tools" class="glass-panel" aria-label="Database tools">
+            <h2>Database tools</h2>
+            <div class="tools-grid">
+                <div>
+                    <h3>Databases</h3>
+                    <p class="tools-line"><span class="tools-label">TikSurfer</span> <code>Tik_Surfer_multi_fix</code></p>
+                    <p class="tools-line"><span class="tools-label">Insta-surfer</span> <code>insta_surf_multi_prisma</code></p>
+                    <p class="checks-note">Created by db-setup on local PostgreSQL. Connection strings stay in db-setup/.env.</p>
+                </div>
+                <div>
+                    <h3>Prisma Studio</h3>
+                    <p class="tools-line"><a id="studio-tiktok" href="#" target="_blank" rel="noopener">TikSurfer, port 5555</a></p>
+                    <p class="tools-line"><a id="studio-insta" href="#" target="_blank" rel="noopener">Insta-surfer, port 5556</a></p>
+                    <p class="checks-note">Opens only while <code>npm run studio:tiksurfer</code> or <code>studio:insta</code> is running.</p>
+                </div>
+                <div>
+                    <h3>medpush-virtual-machine</h3>
+                    <p class="tools-line"><a href="https://medpush-virtual-machine.tail3e5104.ts.net/api/health" target="_blank" rel="noopener">API health, HTTPS 443</a></p>
+                    <p class="tools-line"><a href="https://medpush-virtual-machine.tail3e5104.ts.net:8443/api/health" target="_blank" rel="noopener">API health, HTTPS 8443</a></p>
+                    <p class="checks-note">TikSurfer API on the Tailscale host.</p>
+                </div>
+            </div>
+        </section>
+
         <section class="glass-panel">
             <div class="events-header">
                 <h2>Event feed</h2>

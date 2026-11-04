@@ -395,7 +395,15 @@ function stopAutoRefresh() {
     }
 }
 
+// Studio runs on the machine that serves this page, so link to this page's own host.
+function wireStudioLinks() {
+    document.getElementById('studio-tiktok').href = `http://${location.hostname}:5555`;
+    document.getElementById('studio-insta').href = `http://${location.hostname}:5556`;
+}
+
 // ---- Boot ----
+
+wireStudioLinks();
 
 if (password) {
     showApp();
