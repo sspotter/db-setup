@@ -8,6 +8,25 @@ const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
 const { platformGuard } = require('../middleware/platformGuard');
 const { syncHiddenAcrossTables } = require('../utils/videoSync');
+const { checkPostAccess, checkProjectOwnership } = require('../utils/ownership');
+
+// Hidden / soft-deleted state belongs to the PROJECT (project_posts), never to the shared
+// posts row, so one user's hide cannot affect another user or another project.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Visibility inside one project (query aliases: ppo = project_posts).
+const PROJECT_VISIBLE = ' AND ppo.is_hidden = false AND ppo.deleted_at IS NULL';
+
+// Visibility in the user-wide listing, used when no project_id is given (aliases: p = posts,
+// up = user_scraped_posts). Rule: a post counts as hidden only when ALL of the caller's own
+// project_posts rows for it are hidden or deleted. A post the caller has in at least one
+// visible project, or in no project at all, is visible.
+const USER_VISIBLE = ` AND NOT (
+                EXISTS (SELECT 1 FROM project_posts x JOIN projects xp ON xp.id = x.project_id
+                         WHERE x.post_shortcode = p.shortcode AND xp.user_id = up.user_id)
+                AND NOT EXISTS (SELECT 1 FROM project_posts x JOIN projects xp ON xp.id = x.project_id
+                         WHERE x.post_shortcode = p.shortcode AND xp.user_id = up.user_id
+                           AND x.is_hidden = false AND x.deleted_at IS NULL))`;
 
 /**
  * Upsert a row into ig_users keyed by username.
@@ -328,9 +347,9 @@ router.get('/posts', async (req, res) => {
         let paramIdx = 1;
 
         if (project_id) {
-            // Project-scoped query
+            // Project-scoped query (the hidden state shown is this project's own)
             query = `
-                SELECT p.*,
+                SELECT p.*, ppo.is_hidden, ppo.hidden_at, ppo.deleted_at,
                        (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'reposts', h.repost_count, 'shares', h.share_count, 'bookmarks', h.bookmark_count, 'at', h.captured_at))
                         FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
                        ) AS latest_metrics
@@ -341,9 +360,10 @@ router.get('/posts', async (req, res) => {
             `;
             params.push(project_id, req.user.id);
         } else {
-            // Backward compat: user-scoped via user_scraped_posts
+            // Backward compat: user-scoped via user_scraped_posts. Hidden posts are excluded below,
+            // so report the flags as visible instead of the unused global posts columns.
             query = `
-                SELECT p.*,
+                SELECT p.*, false AS is_hidden, NULL::timestamptz AS hidden_at, NULL::timestamptz AS deleted_at,
                        (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'reposts', h.repost_count, 'shares', h.share_count, 'bookmarks', h.bookmark_count, 'at', h.captured_at))
                         FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
                        ) AS latest_metrics
@@ -355,7 +375,7 @@ router.get('/posts', async (req, res) => {
         }
 
         // Exclude hidden and soft-deleted posts from standard listings (commentator/profiles)
-        query += ` AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
+        query += project_id ? PROJECT_VISIBLE : USER_VISIBLE;
 
         if (owner) {
             query += ` AND p.owner_username = $${paramIdx++}`;
@@ -392,7 +412,7 @@ router.get('/posts', async (req, res) => {
             cIdx = 2;
         }
 
-        countQuery += ` AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
+        countQuery += project_id ? PROJECT_VISIBLE : USER_VISIBLE;
 
         if (owner) { countQuery += ` AND p.owner_username = $${cIdx++}`; countParams.push(owner); }
         if (type) { countQuery += ` AND p.type = $${cIdx++}`; countParams.push(type); }
@@ -424,17 +444,27 @@ router.get('/posts/hidden', async (req, res) => {
         const { project_id } = req.query;
         let query, params;
         if (project_id) {
-            query = `SELECT p.* FROM posts p
+            // This project's own hidden posts; the flags returned are the project's.
+            query = `SELECT p.*, ppo.is_hidden, ppo.hidden_at, ppo.deleted_at FROM posts p
                      JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
                      JOIN projects proj ON ppo.project_id = proj.id
-                     WHERE ppo.project_id = $1 AND proj.user_id = $2 AND p.is_hidden = true
-                     ORDER BY p.hidden_at DESC NULLS LAST, p.posted_at DESC NULLS LAST`;
+                     WHERE ppo.project_id = $1 AND proj.user_id = $2 AND ppo.is_hidden = true
+                     ORDER BY ppo.hidden_at DESC NULLS LAST, p.posted_at DESC NULLS LAST`;
             params = [project_id, req.user.id];
         } else {
-            query = `SELECT p.* FROM posts p
+            // User-wide: exactly the posts the listing hides (every one of the caller's project
+            // links for the post is hidden or deleted; see USER_VISIBLE).
+            query = `SELECT p.*, true AS is_hidden, agg.hidden_at, agg.deleted_at FROM posts p
                      JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode
-                     WHERE up.user_id = $1 AND p.is_hidden = true
-                     ORDER BY p.hidden_at DESC NULLS LAST, p.posted_at DESC NULLS LAST`;
+                     JOIN LATERAL (
+                         SELECT count(*) AS links,
+                                count(*) FILTER (WHERE x.is_hidden = false AND x.deleted_at IS NULL) AS visible,
+                                max(x.hidden_at) AS hidden_at, max(x.deleted_at) AS deleted_at
+                           FROM project_posts x JOIN projects xp ON xp.id = x.project_id
+                          WHERE x.post_shortcode = p.shortcode AND xp.user_id = up.user_id
+                     ) agg ON agg.links > 0 AND agg.visible = 0
+                     WHERE up.user_id = $1
+                     ORDER BY agg.hidden_at DESC NULLS LAST, p.posted_at DESC NULLS LAST`;
             params = [req.user.id];
         }
         const result = await pool.query(query, params);
@@ -448,50 +478,47 @@ router.get('/posts/hidden', async (req, res) => {
 
 /**
  * PATCH /api/posts/:shortcode/hide
- * Body: { is_hidden?: boolean }  (defaults to true)
- * Hide/unhide a post from commentator/profile listings & calculations.
- * Mirrors the state onto any owned tiktok_videos row with the same id
- * (see utils/videoSync.js) so the Keywords/Hashtag view stays in sync.
+ * Body: { is_hidden?: boolean, project_id?: uuid }  (is_hidden defaults to true)
+ * Hide/unhide a post from commentator/profile listings & calculations, PER PROJECT:
+ * the state is stored on the caller's project_posts row(s), never on the shared
+ * posts row. With project_id only that project changes; without it every project of
+ * the caller that has the post changes (never another user's). 404 when nothing matches.
+ * Mirrors the state onto the caller's tiktok_videos row(s) with the same id in the
+ * same projects (see utils/videoSync.js) so the Keywords/Hashtag view stays in sync.
  *
  * Unhiding (is_hidden: false) also clears deleted_at — this is the same
  * "Unhide" button the Hidden Posts tab uses for both a plain hide and a
- * soft-delete (DELETE /posts/:shortcode hides via this same is_hidden
- * flag), so it must fully restore either kind or a soft-deleted post can
- * never come back once hidden.
+ * soft-delete (DELETE /posts/:shortcode hides and sets deleted_at on the same
+ * project_posts row), so it must fully restore either kind or a soft-deleted
+ * post can never come back once hidden.
  */
 router.patch('/posts/:shortcode/hide', async (req, res) => {
     const client = await pool.connect();
     try {
         const { shortcode } = req.params;
         const is_hidden = req.body?.is_hidden !== false; // default true
+        const project_id = req.body?.project_id || req.query.project_id || null;
+
+        if (project_id) {
+            if (!UUID.test(String(project_id))) {
+                return res.status(400).json({ success: false, error: 'Invalid project_id' });
+            }
+            if (!(await checkProjectOwnership(project_id, req.user.id))) {
+                return res.status(404).json({ success: false, error: 'Project not found' });
+            }
+        }
 
         await client.query('BEGIN');
 
-        // Verify the user owns this post via project or legacy user-scrape link
-        const own = await client.query(
-            `SELECT 1 FROM posts p
-             LEFT JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-             LEFT JOIN projects proj ON ppo.project_id = proj.id
-             LEFT JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode
-             WHERE p.shortcode = $1 AND (proj.user_id = $2 OR up.user_id = $2)
-             LIMIT 1`,
-            [shortcode, req.user.id]
+        // Updates only the caller's own project_posts rows (and their tiktok_videos), so a post
+        // the caller does not have in any project of theirs matches nothing.
+        const synced = await syncHiddenAcrossTables(
+            client, shortcode, req.user.id, is_hidden, project_id ? [project_id] : null
         );
-        if (own.rows.length === 0) {
+        if (!synced || synced.posts === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ success: false, error: 'Post not found' });
         }
-
-        await client.query(
-            `UPDATE posts
-             SET is_hidden = $2,
-                 hidden_at = CASE WHEN $2 THEN CURRENT_TIMESTAMP ELSE NULL END,
-                 deleted_at = CASE WHEN $2 THEN deleted_at ELSE NULL END
-             WHERE shortcode = $1`,
-            [shortcode, is_hidden]
-        );
-
-        await syncHiddenAcrossTables(client, shortcode, req.user.id, is_hidden);
 
         await client.query('COMMIT');
         res.json({ success: true, shortcode, is_hidden });
@@ -506,41 +533,48 @@ router.patch('/posts/:shortcode/hide', async (req, res) => {
 });
 
 /**
- * DELETE /api/posts/:shortcode
- * Soft-deletes a post (sets deleted_at) — recoverable, not a hard DELETE,
- * because a hard delete here would also destroy post_metrics_history and
- * post_relations rows that GET history/relations endpoints still read.
- * Mirrors a HIDE (not a delete) onto any owned tiktok_videos row with the
- * same id, so the video disappears from that view too without destroying
+ * DELETE /api/posts/:shortcode[?project_id=uuid]
+ * Soft-deletes a post for the caller, PER PROJECT: sets deleted_at (and hides) on the
+ * caller's project_posts row(s) — recoverable, not a hard DELETE, because a hard delete
+ * here would also destroy post_metrics_history and post_relations rows that GET
+ * history/relations endpoints still read, and the post row is shared with other users.
+ * With project_id only that project changes; without it every project of the caller
+ * that has the post. 404 when nothing matches.
+ * Mirrors a HIDE (not a delete) onto the caller's tiktok_videos row(s) with the same id
+ * in the same projects, so the video disappears from that view too without destroying
  * data that view still owns.
  */
 router.delete('/posts/:shortcode', async (req, res) => {
     const client = await pool.connect();
     try {
         const { shortcode } = req.params;
+        const project_id = req.body?.project_id || req.query.project_id || null;
+
+        if (project_id) {
+            if (!UUID.test(String(project_id))) {
+                return res.status(400).json({ success: false, error: 'Invalid project_id' });
+            }
+            if (!(await checkProjectOwnership(project_id, req.user.id))) {
+                return res.status(404).json({ success: false, error: 'Project not found' });
+            }
+        }
 
         await client.query('BEGIN');
 
-        const own = await client.query(
-            `SELECT 1 FROM posts p
-             LEFT JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-             LEFT JOIN projects proj ON ppo.project_id = proj.id
-             LEFT JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode
-             WHERE p.shortcode = $1 AND (proj.user_id = $2 OR up.user_id = $2)
-             LIMIT 1`,
-            [shortcode, req.user.id]
+        // Hide first: it returns exactly the caller's project_posts rows that matched.
+        const synced = await syncHiddenAcrossTables(
+            client, shortcode, req.user.id, true, project_id ? [project_id] : null
         );
-        if (own.rows.length === 0) {
+        if (!synced || synced.posts === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ success: false, error: 'Post not found' });
         }
 
         await client.query(
-            `UPDATE posts SET deleted_at = CURRENT_TIMESTAMP WHERE shortcode = $1`,
-            [shortcode]
+            `UPDATE project_posts SET deleted_at = CURRENT_TIMESTAMP
+              WHERE post_shortcode = $1 AND project_id = ANY($2::uuid[])`,
+            [shortcode, synced.projectIds]
         );
-
-        await syncHiddenAcrossTables(client, shortcode, req.user.id, true);
 
         await client.query('COMMIT');
         res.json({ success: true, shortcode });
@@ -561,6 +595,10 @@ router.delete('/posts/:shortcode', async (req, res) => {
 router.get('/posts/:shortcode/history', async (req, res) => {
     try {
         const { shortcode } = req.params;
+
+        if (!(await checkPostAccess(shortcode, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
 
         const result = await pool.query(
             `SELECT likes_count, comments_count, video_view_count, captured_at

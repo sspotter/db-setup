@@ -355,6 +355,36 @@ tbody tr:last-child td { border-bottom: none; }
 #db-tools a { color: #93c5fd; }
 #db-tools a:hover { color: var(--text-primary); }
 
+/* Filters, per-card detail blocks, trend bars */
+.filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+.filter-row input, .filter-row select { min-width: 0; max-width: 100%; }
+.card-section { margin-top: 1rem; }
+.card-section h3 { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.trend-bar { display: inline-block; height: 0.6rem; border-radius: 2px; vertical-align: middle; }
+.trend-bar.err { background: var(--danger); }
+.trend-bar.warn { background: var(--warning); }
+.trend-cell { white-space: nowrap; }
+.ip-link { background: none; border: 0; padding: 0; margin-left: 0.75rem; color: #93c5fd; text-decoration: underline; cursor: pointer; font: inherit; }
+.ip-link:hover { color: var(--text-primary); }
+.cell-clip { max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge.outdated { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+
+/* Panels that load when opened */
+details.on-demand > summary { cursor: pointer; }
+details.on-demand > summary h2 { display: inline; font-size: 1.1rem; }
+.panel-filters { margin: 1rem 0 0.5rem; }
+.ip-link.danger-link { color: #f87171; }
+.note-warning { color: #fbbf24; margin-bottom: 0.25rem; }
+.clip-inline { display: block; }
+
+/* Block IP confirmation */
+#block-dialog { margin: auto; width: min(28rem, calc(100vw - 2rem)); background: var(--bg-base); color: var(--text-primary); }
+#block-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+#block-dialog h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+#block-dialog input, #block-dialog select { width: 100%; margin-bottom: 0.75rem; }
+.block-summary { margin-bottom: 0.5rem; font-weight: 600; overflow-wrap: anywhere; }
+.block-actions { justify-content: flex-end; margin-top: 1rem; }
+
 /* Phone width: stack, no page scroll, tables scroll inside card */
 @media (max-width: 640px) {
     .container { padding: 1rem; }

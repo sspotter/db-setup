@@ -145,6 +145,11 @@ model project_posts {
   project_id     String    @db.Uuid
   post_shortcode String    @db.VarChar(255)
   added_at       DateTime? @default(now()) @db.Timestamptz(6)
+  // Hidden / soft-deleted state is per project (migrations/v6_project_post_hide.sql).
+  // The partial indexes idx_project_posts_visible / idx_project_posts_hidden exist only in SQL.
+  is_hidden      Boolean   @default(false)
+  hidden_at      DateTime? @db.Timestamptz(6)
+  deleted_at     DateTime? @db.Timestamptz(6)
   posts          posts     @relation(fields: [post_shortcode], references: [shortcode], onDelete: Cascade, onUpdate: NoAction)
   projects       projects  @relation(fields: [project_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
@@ -411,6 +416,8 @@ model users {
   max_devices         Int?                  @default(3)
   created_at          DateTime?             @default(now()) @db.Timestamptz(6)
   last_seen           DateTime?             @db.Timestamptz(6)
+  plan_expires_at     DateTime?             @db.Timestamptz(6)
+  trial_ends_at       DateTime?             @db.Timestamptz(6)
   comment_scrape_logs comment_scrape_logs[]
   password_resets     password_resets[]
   projects            projects[]
@@ -438,6 +445,42 @@ model api_events {
   @@index([created_at(sort: Desc)], map: "idx_api_events_created_at")
   @@index([path, created_at(sort: Desc)], map: "idx_api_events_path_created")
   @@index([user_id, created_at(sort: Desc)], map: "idx_api_events_user_created")
+}
+
+model admin_audit {
+  id             BigInt   @id @default(autoincrement())
+  created_at     DateTime @default(now()) @db.Timestamptz(6)
+  actor          String   @default("admin")
+  action         String
+  target_user_id String?  @db.Uuid
+  target_email   String?  @db.VarChar(255)
+  detail         Json     @default("{}")
+  ip             String?  @db.VarChar(100)
+
+  @@index([created_at(sort: Desc)], map: "idx_admin_audit_created_at")
+  @@index([action, created_at(sort: Desc)], map: "idx_admin_audit_action_created")
+}
+
+model admin_accounts {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email         String
+  password_hash String
+  name          String?
+  disabled_at   DateTime? @db.Timestamptz(6)
+  last_login    DateTime? @db.Timestamptz(6)
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  created_by    String?
+  // Case-insensitive unique index on lower(email): uq_admin_accounts_email_lower (migrations/v9_admin_accounts.sql)
+}
+
+model blocked_ips {
+  ip         String   @id
+  reason     String?
+  blocked_by String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  expires_at DateTime @db.Timestamptz(6)
+
+  @@index([expires_at], map: "idx_blocked_ips_expires_at")
 }
 
 model password_resets {

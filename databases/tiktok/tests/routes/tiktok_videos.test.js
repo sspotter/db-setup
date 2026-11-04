@@ -146,15 +146,16 @@ describe('tiktok_videos — ownership enforcement (IDOR regression)', () => {
         });
 
         it('syncs the hide to posts when is_hidden is included in the update', async () => {
-            pool.query.mockResolvedValueOnce({ rows: [{ video_id: 'v1', keyword_id: 'k1' }] }); // UPDATE
-            pool.query.mockResolvedValueOnce({ rows: [] });                                     // stats refresh
+            pool.query.mockResolvedValueOnce({ rows: [{ video_id: 'v1', keyword_id: 'k1', project_id: 'p1' }] }); // UPDATE
+            pool.query.mockResolvedValueOnce({ rows: [] });                                                       // stats refresh
 
             const res = await request(app)
                 .patch('/api/tiktok/videos/v1/qualify')
                 .send({ is_hidden: true });
 
             expect(res.status).toBe(200);
-            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true);
+            // only the projects whose video rows just changed are mirrored onto project_posts
+            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true, ['p1']);
         });
 
         it('does not call the sync helper when is_hidden is not part of the update', async () => {
@@ -212,7 +213,8 @@ describe('tiktok_videos — ownership enforcement (IDOR regression)', () => {
             const res = await request(app).delete('/api/tiktok/videos/v1?keyword_id=k1');
 
             expect(res.status).toBe(200);
-            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true);
+            // hidden only in the project this keyword belongs to
+            expect(syncHiddenAcrossTables).toHaveBeenCalledWith(pool, 'v1', 1, true, ['p1']);
         });
     });
 });

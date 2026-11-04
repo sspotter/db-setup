@@ -177,6 +177,15 @@ router.get('/scrape/sessions/:id/next-job', async (req, res) => {
     try {
         const { id } = req.params;
 
+        // Only the session's owner may pull its jobs (404 so existence is not revealed).
+        const owned = await pool.query(
+            'SELECT id FROM scrape_sessions WHERE id = $1 AND user_id = $2',
+            [id, req.user.id]
+        );
+        if (owned.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
+
         const result = await pool.query(
             `SELECT * FROM scrape_jobs
              WHERE session_id = $1 AND status = 'pending'

@@ -22,6 +22,10 @@
             </div>
             <form id="login-form">
                 <div class="form-group">
+                    <label for="admin-email">Email (leave empty for the shared password)</label>
+                    <input type="email" id="admin-email" placeholder="you@example.com" autocomplete="username">
+                </div>
+                <div class="form-group">
                     <label for="admin-password">Enter Password</label>
                     <input type="password" id="admin-password" required placeholder="••••••••">
                 </div>
@@ -49,6 +53,15 @@
                 <h2>User Management</h2>
                 <div class="search-bar">
                     <input type="text" id="search-users" placeholder="Search by email..." autocomplete="off">
+                    <select id="filter-user-status" aria-label="Filter by status"><option value="">All statuses</option></select>
+                    <select id="filter-user-plan" aria-label="Filter by plan"><option value="">All plans</option></select>
+                    <select id="sort-users" aria-label="Sort users">
+                        <option value="created_desc">Newest first</option>
+                        <option value="created_asc">Oldest first</option>
+                        <option value="email_asc">Email A-Z</option>
+                        <option value="login_desc">Last login: recent</option>
+                        <option value="login_asc">Last login: oldest / never</option>
+                    </select>
                 </div>
             </div>
 
@@ -92,6 +105,83 @@
                 <div><h3>Errors per day</h3><div id="trend-bars"></div></div>
             </div>
             <div id="insights-error" class="error-message hidden"></div>
+        </section>
+
+        <section class="insights-section glass-panel" id="usage-section">
+            <div class="panel-header">
+                <h2>Usage</h2>
+                <select id="usage-days" aria-label="Usage window">
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                </select>
+            </div>
+            <div class="last-good" id="usage-note"></div>
+            <div class="insights-grid">
+                <div><h3>Top users</h3><div id="usage-top"></div></div>
+                <div><h3>Failed scrape jobs</h3><div id="usage-failed"></div></div>
+            </div>
+            <h3>All users</h3>
+            <input type="text" id="usage-search" placeholder="Search by email..." autocomplete="off">
+            <div class="table-container" id="usage-users"></div>
+            <div id="usage-error" class="error-message hidden"></div>
+        </section>
+
+        <section class="insights-section glass-panel" id="audit-section">
+            <div class="panel-header">
+                <h2>Admin audit log</h2>
+                <button type="button" id="audit-refresh-btn" class="btn secondary-btn">Refresh</button>
+            </div>
+            <div class="search-bar">
+                <input type="text" id="audit-search" placeholder="Email, IP, action..." autocomplete="off">
+                <select id="audit-action" aria-label="Filter by action"><option value="">All actions</option></select>
+            </div>
+            <div class="last-good">Who is the admin's email for account sign-ins. Anyone using the shared password shows as shared-password, so those entries can't name a person.</div>
+            <div id="audit-table"></div>
+            <div id="audit-error" class="error-message hidden"></div>
+        </section>
+
+        <section class="insights-section glass-panel" id="blocks-section">
+            <div class="panel-header">
+                <h2>Blocked IPs</h2>
+            </div>
+            <div class="last-good">A block refuses sign-in from that address on this backend until it expires. People already signed in are not affected, because an office shares one address.</div>
+            <form id="block-form" class="search-bar">
+                <input type="text" id="block-ip" placeholder="IP address" required autocomplete="off" aria-label="IP address">
+                <input type="text" id="block-reason" placeholder="Reason (optional)" maxlength="200" autocomplete="off" aria-label="Reason">
+                <select id="block-hours" aria-label="Block for">
+                    <option value="1">1 hour</option>
+                    <option value="24" selected>24 hours</option>
+                    <option value="168">7 days</option>
+                    <option value="720">30 days</option>
+                </select>
+                <button type="submit" class="btn secondary-btn">Block</button>
+            </form>
+            <div id="blocks-note" class="last-good hidden"></div>
+            <div id="blocks-table"></div>
+            <div id="blocks-error" class="error-message hidden"></div>
+        </section>
+
+        <section class="insights-section glass-panel" id="admins-section">
+            <div class="panel-header">
+                <h2>Admin accounts</h2>
+            </div>
+            <div class="last-good">Each person signs in with their own email, so the audit log can name them. The shared password keeps working alongside these. Needs ADMIN_JWT_SECRET on the server.</div>
+            <form id="admin-create-form" class="search-bar">
+                <input type="email" id="admin-new-email" placeholder="Email" required autocomplete="off" aria-label="New admin email">
+                <input type="text" id="admin-new-name" placeholder="Name (optional)" maxlength="100" autocomplete="off" aria-label="New admin name">
+                <input type="password" id="admin-new-account-password" placeholder="Password (12+ characters)" required minlength="12" autocomplete="new-password" aria-label="New admin password">
+                <button type="submit" class="btn secondary-btn">Add admin</button>
+            </form>
+            <div id="admins-note" class="last-good hidden"></div>
+            <form id="admin-password-editor" class="search-bar hidden">
+                <label for="admin-new-password" id="admin-password-for"></label>
+                <input type="password" id="admin-new-password" required minlength="12" autocomplete="new-password">
+                <button type="submit" class="btn secondary-btn">Save</button>
+                <button type="button" id="admin-password-cancel" class="btn secondary-btn">Cancel</button>
+            </form>
+            <div id="admins-table"></div>
+            <div id="admins-error" class="error-message hidden"></div>
         </section>
 
         <section class="activity-section glass-panel">
@@ -213,6 +303,14 @@
                     <label for="max-devices">Max Devices</label>
                     <input type="number" id="max-devices" value="3" min="1" max="100">
                 </div>
+                <div class="form-group">
+                    <label for="plan-expires">Plan expires (optional)</label>
+                    <input type="date" id="plan-expires">
+                </div>
+                <div class="form-group">
+                    <label for="trial-ends">Trial ends (optional)</label>
+                    <input type="date" id="trial-ends">
+                </div>
                 <div class="form-actions">
                     <button type="button" class="btn secondary-btn close-modal-btn">Cancel</button>
                     <button type="submit" class="btn primary-btn submit-btn">Create User</button>
@@ -269,6 +367,7 @@
                 <p>Create a link for <strong id="reset-user-email"></strong>. Single use, valid 24 hours. Generating a new link voids older ones.</p>
                 <label for="reset-base">Send through</label>
                 <select id="reset-base" style="width:100%;margin:6px 0"></select>
+                <input type="text" id="reset-base-custom" class="hidden" placeholder="https://example.com:8443" autocomplete="off" style="width:100%;margin:0 0 6px 0">
                 <button type="button" id="reset-generate-btn" class="btn primary-btn">Generate link</button>
                 <div id="reset-result" class="hidden">
                     <p>Expires <span id="reset-expires"></span></p>
@@ -291,6 +390,39 @@
             <div id="history-feed" class="activity-feed history-feed"></div>
             <div id="history-loading" class="loading-spinner hidden"></div>
             <div id="history-error" class="error-message hidden"></div>
+        </div>
+    </div>
+
+    <!-- Projects Modal: pick a project of this user and delete it -->
+    <div id="projects-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel large-modal">
+            <div class="modal-header">
+                <h3 id="projects-modal-title">Projects</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="warning-text">Deleting a project removes the project and its links (posts, profiles and any keyword/video data). A post itself is deleted only if no other project and no user's saved posts still use it.</p>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;align-items:center">
+                    <input type="text" id="projects-search" placeholder="Search project name..." autocomplete="off" style="flex:1;min-width:180px">
+                    <select id="projects-filter" aria-label="Filter projects">
+                        <option value="all">All projects</option>
+                        <option value="with_posts">With posts</option>
+                        <option value="empty">Empty (0 posts)</option>
+                        <option value="recent">Created in last 30 days</option>
+                    </select>
+                    <select id="projects-sort" aria-label="Sort projects">
+                        <option value="created_desc">Newest first</option>
+                        <option value="created_asc">Oldest first</option>
+                        <option value="name_asc">Name A-Z</option>
+                        <option value="posts_desc">Most posts</option>
+                        <option value="posts_asc">Fewest posts</option>
+                    </select>
+                </div>
+                <div id="projects-count" style="font-size:0.85em;color:var(--text-secondary);margin-bottom:4px"></div>
+                <div id="projects-list"></div>
+                <div id="projects-loading" class="loading-spinner hidden"></div>
+                <div id="projects-error" class="error-message hidden"></div>
+            </div>
         </div>
     </div>
 

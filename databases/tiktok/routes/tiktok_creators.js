@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { checkKeywordOwnership } = require('../utils/ownership');
 
 /**
  * GET /api/tiktok/creators?keyword_id=...
@@ -11,6 +12,9 @@ router.get('/tiktok/creators', async (req, res) => {
     try {
         const { keyword_id } = req.query;
         if (!keyword_id) return res.status(400).json({ success: false, error: 'keyword_id is required' });
+        if (!(await checkKeywordOwnership(keyword_id, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
 
         const result = await pool.query(
             `SELECT c.*, kc.video_count, kc.total_views, kc.first_seen_at as association_date

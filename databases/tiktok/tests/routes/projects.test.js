@@ -158,8 +158,10 @@ describe('Projects API Endpoints', () => {
             await request(app).get('/api/projects/p1/posts');
 
             const postsCall = pool.query.mock.calls.find(c => c[0].includes('FROM posts p'));
-            expect(postsCall[0]).toMatch(/is_hidden = false OR p\.is_hidden IS NULL/);
-            expect(postsCall[0]).toMatch(/deleted_at IS NULL/);
+            // Hidden / soft-deleted state is the project's own (project_posts), not the shared post's.
+            expect(postsCall[0]).toMatch(/ppo\.is_hidden = false/);
+            expect(postsCall[0]).toMatch(/ppo\.deleted_at IS NULL/);
+            expect(postsCall[0]).not.toMatch(/p\.is_hidden|p\.deleted_at/);
         });
     });
 });

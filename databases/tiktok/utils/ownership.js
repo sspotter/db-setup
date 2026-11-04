@@ -79,6 +79,26 @@ async function checkScrapeJobOwnership(jobId, userId) {
     return result.rows.length > 0;
 }
 
+/**
+ * True when the user "has" this post: it is linked into one of their projects
+ * or saved in their own user_scraped_posts. Posts (and the comments, metrics
+ * and relations hanging off them) are SHARED rows keyed by shortcode, so the
+ * post merely existing is not enough to read or write data attached to it.
+ */
+async function checkPostAccess(shortcode, userId) {
+    const result = await pool.query(
+        `SELECT 1 FROM project_posts pp
+           JOIN projects p ON pp.project_id = p.id
+          WHERE pp.post_shortcode = $1 AND p.user_id = $2
+         UNION ALL
+         SELECT 1 FROM user_scraped_posts
+          WHERE post_shortcode = $1 AND user_id = $2
+         LIMIT 1`,
+        [shortcode, userId]
+    );
+    return result.rows.length > 0;
+}
+
 module.exports = {
     checkProjectOwnership,
     getOwnedKeyword,
@@ -86,4 +106,5 @@ module.exports = {
     checkVideoOwnership,
     checkSessionOwnership,
     checkScrapeJobOwnership,
+    checkPostAccess,
 };

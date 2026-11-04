@@ -259,7 +259,9 @@ CREATE TABLE public.users (
     active_sessions integer DEFAULT 0,
     last_login timestamp with time zone,
     max_devices integer DEFAULT 3,
-    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    plan_expires_at timestamp with time zone,
+    trial_ends_at timestamp with time zone
 );
 
 
@@ -698,6 +700,58 @@ ALTER TABLE ONLY public.user_scraped_posts
 
 ALTER TABLE ONLY public.user_scraped_posts
     ADD CONSTRAINT user_scraped_posts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: admin_audit; Type: TABLE; Schema: public (migrations/v7_admin_audit.sql)
+--
+
+CREATE TABLE public.admin_audit (
+    id bigserial PRIMARY KEY,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    actor text DEFAULT 'admin'::text NOT NULL,
+    action text NOT NULL,
+    target_user_id uuid,
+    target_email character varying(255),
+    detail jsonb DEFAULT '{}'::jsonb NOT NULL,
+    ip character varying(100)
+);
+
+CREATE INDEX idx_admin_audit_created_at ON public.admin_audit USING btree (created_at DESC);
+CREATE INDEX idx_admin_audit_action_created ON public.admin_audit USING btree (action, created_at DESC);
+
+
+--
+-- Name: admin_accounts; Type: TABLE; Schema: public (migrations/v9_admin_accounts.sql)
+--
+
+CREATE TABLE public.admin_accounts (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    email text NOT NULL,
+    password_hash text NOT NULL,
+    name text,
+    disabled_at timestamp with time zone,
+    last_login timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    created_by text
+);
+
+CREATE UNIQUE INDEX uq_admin_accounts_email_lower ON public.admin_accounts USING btree (lower(email));
+
+
+--
+-- Name: blocked_ips; Type: TABLE; Schema: public (migrations/v10_blocked_ips.sql)
+--
+
+CREATE TABLE public.blocked_ips (
+    ip text PRIMARY KEY,
+    reason text,
+    blocked_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL
+);
+
+CREATE INDEX idx_blocked_ips_expires_at ON public.blocked_ips USING btree (expires_at);
 
 
 --

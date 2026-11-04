@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { userHasPost } = require('../utils/ownership');
 
 /**
  * POST /api/comments
@@ -22,6 +23,11 @@ router.post('/comments', async (req, res) => {
 
         if (!post_shortcode || !Array.isArray(comments) || comments.length === 0) {
             return res.status(400).json({ success: false, error: 'post_shortcode and comments array required' });
+        }
+
+        // Posts are shared rows: a user may only write comments onto a post they have.
+        if (!(await userHasPost(req.user.id, post_shortcode))) {
+            return res.status(404).json({ success: false, error: 'Post not found' });
         }
 
         await client.query('BEGIN');

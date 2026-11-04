@@ -18,6 +18,12 @@ const scrapeRoutes = require('./routes/scrape');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const adminInsightsRoutes = require('./routes/adminInsights');
+const adminProjectsRoutes = require('./routes/adminProjects');
+const adminAuditRoutes = require('./routes/adminAudit');
+const adminUsageRoutes = require('./routes/adminUsage');
+const adminPlansRoutes = require('./routes/adminPlans');
+const adminAccountsRoutes = require('./routes/adminAccounts');
+const adminBlocksRoutes = require('./routes/adminBlocks');
 const projectsRoutes = require('./routes/projects');
 const keywordsRoutes = require('./routes/keywords');
 const tiktokVideosRoutes = require('./routes/tiktok_videos');
@@ -41,6 +47,12 @@ app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminInsightsRoutes);
+app.use('/api/admin', adminProjectsRoutes);
+app.use('/api/admin', adminAuditRoutes);
+app.use('/api/admin', adminUsageRoutes);
+app.use('/api/admin', adminPlansRoutes);
+app.use('/api/admin', adminAccountsRoutes);
+app.use('/api/admin', adminBlocksRoutes);
 
 // Protected routes (requires JWT)
 app.use('/api', authenticateToken, usersRoutes);

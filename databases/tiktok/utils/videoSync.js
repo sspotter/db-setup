@@ -1,53 +1,60 @@
 /**
- * Mirrors a hide/unhide state across the `posts` and `tiktok_videos` tables
- * for the same TikTok video id (posts.shortcode === tiktok_videos.video_id).
+ * Mirrors a hide/unhide for one TikTok video id onto the PER-PROJECT state:
+ *   - project_posts: the hidden state lives on the project's own link row, so a hide
+ *     in one project (or by one user) never touches another project or user.
+ *   - tiktok_videos: the keyword view's row for the same video id, in the same projects.
+ * Both are limited to projects the caller owns (projects.user_id = userId).
  *
- * Both tables are scoped to rows the caller owns:
- *   - posts:         via project_posts/projects or user_scraped_posts.
- *   - tiktok_videos:  via project_id -> projects.user_id (video_id is NOT
- *                      globally unique — the same id can exist under other
- *                      users' keywords, see utils/ownership.js).
+ * projectIds (optional): limit the sync to these projects. Omitted / null means every
+ * project the caller owns that has the video (the old "hide it everywhere I have it"
+ * behaviour, but never anybody else's). An empty array touches nothing.
  *
- * A row that doesn't exist for the caller in one table is silently a no-op
- * for that table (0 rows updated) — this is expected when a video was only
- * ever captured on one side.
+ * A project that has the video in only one of the two tables is silently a no-op for
+ * the other table (expected when a video was only ever captured on one side).
  *
- * Pass a transaction client when the caller's own update must commit
- * atomically with this sync (see posts.js's hide/delete routes, which do —
- * they run this inside their own BEGIN/COMMIT). tiktok_videos.js's qualify
- * and delete routes pass the plain `pool` instead, matching those routes'
- * existing non-transactional style; this leaves a narrow partial-failure
- * window there (e.g. the tiktok_videos row is deleted, then this call
- * throws before the posts row is hidden) that pre-dates this helper and is
- * not introduced by it — the two prior statements in the pool.query case
- * simply commit independently rather than as one unit.
+ * Returns { posts, videos, projectIds }: the number of project_posts / tiktok_videos
+ * rows changed and the ids of the projects whose project_posts row changed, so a
+ * caller can answer 404 when nothing matched or apply a further per-project change.
+ *
+ * Pass a transaction client when the caller's own update must commit atomically with
+ * this sync (posts.js's hide/delete routes do). tiktok_videos.js passes the plain
+ * `pool`, matching those routes' existing non-transactional style.
  */
-async function syncHiddenAcrossTables(client, id, userId, isHidden) {
-    await client.query(
-        `UPDATE posts p
-            SET is_hidden = $3,
-                hidden_at = CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END
-           FROM (
-                SELECT p2.shortcode
-                  FROM posts p2
-                  LEFT JOIN project_posts ppo ON p2.shortcode = ppo.post_shortcode
-                  LEFT JOIN projects proj ON ppo.project_id = proj.id
-                  LEFT JOIN user_scraped_posts up ON p2.shortcode = up.post_shortcode
-                 WHERE p2.shortcode = $1 AND (proj.user_id = $2 OR up.user_id = $2)
-           ) owned
-          WHERE p.shortcode = owned.shortcode`,
-        [id, userId, isHidden]
+async function syncHiddenAcrossTables(client, id, userId, isHidden, projectIds = null) {
+    const scope = Array.isArray(projectIds) ? projectIds : null;
+    if (scope && scope.length === 0) return { posts: 0, videos: 0, projectIds: [] };
+
+    const posts = await client.query(
+        `UPDATE project_posts ppo
+            SET is_hidden = $3::boolean,
+                hidden_at = CASE WHEN $3::boolean THEN CURRENT_TIMESTAMP ELSE NULL END,
+                deleted_at = CASE WHEN $3::boolean THEN ppo.deleted_at ELSE NULL END
+           FROM projects proj
+          WHERE ppo.project_id = proj.id
+            AND ppo.post_shortcode = $1
+            AND proj.user_id = $2
+            AND ($4::uuid[] IS NULL OR ppo.project_id = ANY($4::uuid[]))
+        RETURNING ppo.project_id`,
+        [id, userId, isHidden, scope]
     );
 
-    await client.query(
+    const videos = await client.query(
         `UPDATE tiktok_videos v
-            SET is_hidden = $3, updated_at = CURRENT_TIMESTAMP
+            SET is_hidden = $3::boolean, updated_at = CURRENT_TIMESTAMP
            FROM projects p
           WHERE v.project_id = p.id
             AND v.video_id = $1
-            AND p.user_id = $2`,
-        [id, userId, isHidden]
+            AND p.user_id = $2
+            AND ($4::uuid[] IS NULL OR v.project_id = ANY($4::uuid[]))`,
+        [id, userId, isHidden, scope]
     );
+
+    const postRows = (posts && posts.rows) || [];
+    return {
+        posts: postRows.length,
+        videos: (videos && videos.rowCount) || 0,
+        projectIds: postRows.map((r) => r.project_id),
+    };
 }
 
 module.exports = { syncHiddenAcrossTables };

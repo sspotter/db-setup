@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { getOwnedKeyword, checkKeywordOwnership, checkVideoOwnership, checkSessionOwnership } = require('../utils/ownership');
 
 /**
  * GET /api/tiktok/comments?keyword_id=...
@@ -17,9 +18,20 @@ router.get('/tiktok/comments', async (req, res) => {
         const params = [];
 
         if (video_id) {
-            query += ` WHERE video_id = $1 ORDER BY likes_count DESC, commented_at DESC`;
-            params.push(video_id);
+            if (!(await checkVideoOwnership(video_id, req.user.id))) {
+                return res.status(404).json({ success: false, error: 'Not found' });
+            }
+            // A video_id is not globally unique: also leave out comments captured under other users' keywords.
+            query += ` WHERE video_id = $1
+                         AND (keyword_id IS NULL OR EXISTS (
+                                SELECT 1 FROM search_keywords k JOIN projects p ON k.project_id = p.id
+                                 WHERE k.id = tiktok_comments.keyword_id AND p.user_id = $2))
+                       ORDER BY likes_count DESC, commented_at DESC`;
+            params.push(video_id, req.user.id);
         } else if (keyword_id) {
+            if (!(await checkKeywordOwnership(keyword_id, req.user.id))) {
+                return res.status(404).json({ success: false, error: 'Not found' });
+            }
             query += ` WHERE keyword_id = $1 ORDER BY likes_count DESC, commented_at DESC`;
             params.push(keyword_id);
         } else {
@@ -48,6 +60,17 @@ router.post('/tiktok/comments/batch', async (req, res) => {
         }
         if (!video_id) {
             return res.status(400).json({ success: false, error: 'video_id is required' });
+        }
+
+        // The caller must own the keyword and the video before anything is written.
+        let keywordId = null;
+        if (keyword_id) {
+            const owned = await getOwnedKeyword(keyword_id, req.user.id);
+            if (!owned) return res.status(404).json({ success: false, error: 'Not found' });
+            keywordId = owned.id;
+        }
+        if (!(await checkVideoOwnership(video_id, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
         }
 
         await client.query('BEGIN');
@@ -85,8 +108,12 @@ router.post('/tiktok/comments/batch', async (req, res) => {
         // Update video status to comments_done or partial
         if (video_id) {
             await client.query(
-                `UPDATE tiktok_videos SET capture_status = 'comments_done', updated_at = CURRENT_TIMESTAMP WHERE video_id = $1`,
-                [video_id]
+                `UPDATE tiktok_videos v
+                    SET capture_status = 'comments_done', updated_at = CURRENT_TIMESTAMP
+                   FROM projects p
+                  WHERE v.project_id = p.id AND p.user_id = $2 AND v.video_id = $1
+                    AND ($3::uuid IS NULL OR v.keyword_id = $3::uuid)`,
+                [video_id, req.user.id, keywordId]
             );
         }
 
@@ -109,6 +136,13 @@ router.post('/tiktok/comments/batch', async (req, res) => {
 router.post('/tiktok/graphql_captures', async (req, res) => {
     try {
         const { session_id, keyword_id, video_id, url, method, capture_type, request_body, response_body } = req.body;
+
+        // Anything the capture is tagged with must belong to the caller.
+        if ((keyword_id && !(await checkKeywordOwnership(keyword_id, req.user.id)))
+            || (video_id && !(await checkVideoOwnership(video_id, req.user.id)))
+            || (session_id && !(await checkSessionOwnership(session_id, req.user.id)))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
+        }
         
         await pool.query(
             `INSERT INTO tiktok_graphql_captures (

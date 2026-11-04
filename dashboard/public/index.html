@@ -28,6 +28,8 @@
         <header class="header glass-panel">
             <h1>Surfer Monitor</h1>
             <div class="header-actions">
+                <a id="admin-tiktok" class="btn" href="#" target="_blank" rel="noopener">TikTok admin</a>
+                <a id="admin-insta" class="btn" href="#" target="_blank" rel="noopener">Instagram admin</a>
                 <span id="updated-stamp" class="updated-stamp">Updated —:—:—</span>
                 <button id="refresh-btn" class="btn">Refresh</button>
                 <button id="check-btn" class="btn">Run checks</button>
@@ -68,16 +70,64 @@
 
         <section class="glass-panel">
             <div class="events-header">
-                <h2>Event feed</h2>
-                <div>
-                    <label for="platform-filter" style="display:inline; margin-right:0.5rem;">Platform</label>
-                    <select id="platform-filter">
-                        <option value="all">All</option>
+                <h2>Users</h2>
+                <div class="filter-row">
+                    <select id="users-platform" aria-label="Users platform">
                         <option value="tiktok">TikTok</option>
                         <option value="instagram">Instagram</option>
                     </select>
+                    <input type="search" id="users-search" placeholder="Search email" aria-label="Search users">
+                    <select id="users-status" aria-label="User status">
+                        <option value="">Any status</option>
+                    </select>
+                    <select id="users-sort" aria-label="Sort users">
+                        <option value="created_at">Newest</option>
+                        <option value="last_seen">Last seen</option>
+                        <option value="ghost_sessions">Ghost sessions</option>
+                        <option value="email">Email</option>
+                    </select>
+                    <button id="users-load" class="btn">Load users</button>
                 </div>
             </div>
+            <div id="users-note" class="checks-note"></div>
+            <div class="table-container">
+                <table id="users-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th><th>Status</th><th>Plan</th><th>Devices</th><th>Ghost</th>
+                            <th>Last seen</th><th>Last login</th><th>Ext</th><th>Last issue</th><th>Reset link</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="glass-panel">
+            <div class="events-header">
+                <h2>Event feed</h2>
+                <div class="filter-row">
+                    <select id="platform-filter" aria-label="Platform">
+                        <option value="all">All platforms</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram">Instagram</option>
+                    </select>
+                    <select id="result-filter" aria-label="Result">
+                        <option value="any">Any result</option>
+                        <option value="success">Success</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                    <select id="action-filter" aria-label="Action">
+                        <option value="all">Logins and API</option>
+                        <option value="login">Logins</option>
+                        <option value="api">API calls</option>
+                    </select>
+                    <input type="search" id="user-filter" placeholder="User email (exact)" aria-label="User">
+                    <input type="search" id="q-filter" placeholder="Search text or IP" aria-label="Search">
+                    <button id="events-clear" class="btn">Clear</button>
+                </div>
+            </div>
+            <div id="events-stats" class="checks-note"></div>
             <div id="events-errors"></div>
             <div class="table-container">
                 <table id="events-table">
@@ -89,6 +139,9 @@
                             <th>Method / Path</th>
                             <th>Email</th>
                             <th>Reason / Error</th>
+                            <th>IP</th>
+                            <th>Agent</th>
+                            <th>Ext</th>
                             <th>ms</th>
                         </tr>
                     </thead>
@@ -97,12 +150,104 @@
             </div>
         </section>
 
+        <details id="usage-panel" class="glass-panel on-demand">
+            <summary><h2>Usage</h2></summary>
+            <div class="filter-row panel-filters">
+                <select id="usage-platform" aria-label="Usage platform">
+                    <option value="tiktok">TikTok</option>
+                    <option value="instagram">Instagram</option>
+                </select>
+                <select id="usage-days" aria-label="Usage window">
+                    <option value="7">Last 7 days</option>
+                    <option value="30" selected>Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                </select>
+                <input type="search" id="usage-search" placeholder="Search email" aria-label="Search usage">
+                <select id="usage-sort" aria-label="Sort usage">
+                    <option value="usage_score">Most used</option>
+                    <option value="jobs_failed">Failed jobs</option>
+                    <option value="jobs_stuck">Stuck jobs</option>
+                    <option value="api_calls">API calls</option>
+                    <option value="comments_scraped">Comments</option>
+                    <option value="saved_posts">Saved posts</option>
+                    <option value="email">Email</option>
+                </select>
+            </div>
+            <div id="usage-note" class="checks-note"></div>
+            <div id="usage-box"></div>
+        </details>
+
+        <details id="expiring-panel" class="glass-panel on-demand">
+            <summary><h2>Expiring plans</h2></summary>
+            <div class="filter-row panel-filters">
+                <select id="expiring-days" aria-label="Expiring within">
+                    <option value="7">Within 7 days</option>
+                    <option value="14" selected>Within 14 days</option>
+                    <option value="30">Within 30 days</option>
+                    <option value="90">Within 90 days</option>
+                </select>
+            </div>
+            <div id="expiring-note" class="checks-note"></div>
+            <div id="expiring-box"></div>
+        </details>
+
+        <details id="audit-panel" class="glass-panel on-demand">
+            <summary><h2>Admin audit log</h2></summary>
+            <div class="filter-row panel-filters">
+                <select id="audit-platform" aria-label="Audit platform">
+                    <option value="all">All platforms</option>
+                    <option value="tiktok">TikTok</option>
+                    <option value="instagram">Instagram</option>
+                </select>
+                <select id="audit-action" aria-label="Audit action">
+                    <option value="">Any action</option>
+                </select>
+                <select id="audit-since" aria-label="Audit period">
+                    <option value="">All time</option>
+                    <option value="1">Last 24 hours</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
+                <input type="search" id="audit-q" placeholder="Search email, IP or action" aria-label="Search audit log">
+            </div>
+            <div id="audit-note" class="checks-note"></div>
+            <div id="audit-box"></div>
+        </details>
+
+        <details id="blocks-panel" class="glass-panel on-demand">
+            <summary><h2>Blocked IPs</h2></summary>
+            <div id="blocks-note" class="checks-note"></div>
+            <div id="blocks-box"></div>
+        </details>
+
         <section id="checks-panel" class="glass-panel hidden">
             <h2>Check results</h2>
             <div id="checks-result"></div>
             <p class="checks-note">Sends one failed login per backend; limited to once per 2 min.</p>
         </section>
     </main>
+
+    <dialog id="block-dialog" class="glass-panel" aria-labelledby="block-title">
+        <form id="block-form">
+            <h2 id="block-title">Block IP</h2>
+            <label for="block-hours">Block for</label>
+            <select id="block-hours">
+                <option value="1">1 hour</option>
+                <option value="24" selected>24 hours</option>
+                <option value="168">7 days</option>
+                <option value="720">30 days</option>
+            </select>
+            <label for="block-reason">Reason (optional)</label>
+            <input type="text" id="block-reason" maxlength="200" autocomplete="off">
+            <p id="block-summary" class="block-summary"></p>
+            <p class="checks-note">This applies to login only: people on that address can't sign in, and anyone already signed in stays signed in. If it is an office or shared connection, everyone there is affected.</p>
+            <div id="block-error" class="error-message hidden"></div>
+            <div class="filter-row block-actions">
+                <button type="button" id="block-cancel" class="btn">Cancel</button>
+                <button type="submit" id="block-confirm" class="btn danger">Block IP</button>
+            </div>
+        </form>
+    </dialog>
 
     <script src="app.js"></script>
 </body>

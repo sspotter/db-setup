@@ -1038,3 +1038,9 @@ select option {
 .toast.error {
     border-left: 4px solid var(--danger);
 }
+
+/* Long audit details and job errors wrap, wide mini tables scroll inside their own box, so the page itself never scrolls sideways. */
+#versions-table, #failing-table, #slow-table, #usage-top, #usage-failed, #usage-users, #audit-table { overflow-x: auto; }
+.mini-table td .last-good { white-space: normal; overflow-wrap: anywhere; }
+/* Keep the row actions reachable while the users table scrolls sideways. */
+#users-table th:last-child, #users-table td:last-child { position: sticky; right: 0; z-index: 1; background: var(--sticky-actions-bg, #131c31); box-shadow: -8px 0 8px -8px rgba(0, 0, 0, 0.6); }

@@ -18,9 +18,21 @@ const eventsBody = document.getElementById('events-body');
 const eventsErrors = document.getElementById('events-errors');
 const checksPanel = document.getElementById('checks-panel');
 const checksResult = document.getElementById('checks-result');
+const resultFilter = document.getElementById('result-filter');
+const actionFilter = document.getElementById('action-filter');
+const userFilter = document.getElementById('user-filter');
+const qFilter = document.getElementById('q-filter');
+const eventsStats = document.getElementById('events-stats');
+const usersPlatform = document.getElementById('users-platform');
+const usersSearch = document.getElementById('users-search');
+const usersStatus = document.getElementById('users-status');
+const usersSort = document.getElementById('users-sort');
+const usersBody = document.getElementById('users-body');
+const usersNote = document.getElementById('users-note');
 
 let overviewInFlight = false;
 let eventsInFlight = false;
+let eventsReload = false; // a filter changed while a request was running
 let refreshTimer = null;
 
 function el(tag, opts) {
@@ -53,6 +65,8 @@ function showLogin(message) {
         loginError.classList.add('hidden');
     }
     stopAutoRefresh();
+    // Closing an on-demand panel also empties it, so no user rows stay in the page after logout.
+    document.querySelectorAll('details.on-demand').forEach((d) => { d.open = false; });
 }
 
 function showApp() {
@@ -68,7 +82,20 @@ async function api(path, opts) {
         showLogin('Wrong password');
         throw new Error('unauthorized');
     }
+    // /api/check has its own 429 (the cooldown); only the lockout carries `locked`.
+    if (res.status === 429) {
+        const body = await res.clone().json().catch(() => ({}));
+        if (body.locked) {
+            showLogin(lockedMessage(body));
+            throw new Error('unauthorized');
+        }
+    }
     return res;
+}
+
+function lockedMessage(body) {
+    const minutes = Math.max(1, Math.ceil((body.retry_after_s || 0) / 60));
+    return `Too many wrong passwords. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
 }
 
 loginForm.addEventListener('submit', async (e) => {
@@ -80,6 +107,12 @@ loginForm.addEventListener('submit', async (e) => {
         if (res.status === 401) {
             password = '';
             loginError.textContent = 'Wrong password';
+            loginError.classList.remove('hidden');
+            return;
+        }
+        if (res.status === 429) {
+            password = '';
+            loginError.textContent = lockedMessage(await res.json().catch(() => ({})));
             loginError.classList.remove('hidden');
             return;
         }
@@ -100,6 +133,23 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 document.getElementById('refresh-btn').addEventListener('click', () => refreshAll());
 document.getElementById('check-btn').addEventListener('click', () => runChecks());
 platformFilter.addEventListener('change', () => loadEvents());
+resultFilter.addEventListener('change', () => loadEvents());
+actionFilter.addEventListener('change', () => loadEvents());
+let filterTimer = null;
+function loadEventsSoon() {
+    clearTimeout(filterTimer);
+    filterTimer = setTimeout(loadEvents, 400);
+}
+userFilter.addEventListener('input', loadEventsSoon);
+qFilter.addEventListener('input', loadEventsSoon);
+document.getElementById('events-clear').addEventListener('click', () => {
+    platformFilter.value = 'all';
+    resultFilter.value = 'any';
+    actionFilter.value = 'all';
+    userFilter.value = '';
+    qFilter.value = '';
+    loadEvents();
+});
 
 // ---- Overview ----
 
@@ -110,8 +160,27 @@ function severityClass(sev) {
 function buildAlertRow(platform, alert) {
     const row = el('div', { className: `alert-row ${severityClass(alert.severity)}` });
     row.appendChild(el('span', { className: `badge platform-${platform}`, text: platform === 'tiktok' ? 'TikTok' : 'Instagram' }));
-    row.appendChild(el('span', { text: alert.message || '' }));
+    row.appendChild(el('span', { text: alertText(alert) }));
+    if (alert.ip) {
+        const link = el('button', { className: 'ip-link', text: `Show events from ${alert.ip}` });
+        link.type = 'button';
+        link.addEventListener('click', () => filterEventsByIp(platform, alert.ip));
+        row.appendChild(link);
+        const block = el('button', { className: 'ip-link danger-link', text: 'Block IP' });
+        block.type = 'button';
+        block.addEventListener('click', () => openBlockDialog(platform, alert.ip));
+        row.appendChild(block);
+    }
     return row;
+}
+
+// Older backends send the numbers only inside the message, so that stays the fallback.
+function alertText(alert) {
+    if (alert.type !== 'failed_logins_ip' || !alert.ip || typeof alert.count !== 'number') return alert.message || '';
+    const accounts = typeof alert.accounts === 'number'
+        ? `, ${alert.accounts} account${alert.accounts === 1 ? '' : 's'} targeted`
+        : '';
+    return `${alert.ip}: ${alert.count} failed logins in 15 min${accounts}`;
 }
 
 function renderAlerts(data) {
@@ -164,7 +233,7 @@ function renderSlowTable(container, slow) {
     thead.appendChild(headRow);
     table.appendChild(thead);
     const tbody = el('tbody');
-    slow.slice(0, 5).forEach((s) => {
+    slow.slice(0, 10).forEach((s) => {
         const tr = el('tr');
         tr.appendChild(el('td', { text: fmtVal(s.method) }));
         tr.appendChild(el('td', { text: fmtVal(s.path) }));
@@ -176,6 +245,93 @@ function renderSlowTable(container, slow) {
     table.appendChild(tbody);
     wrap.appendChild(table);
     container.appendChild(wrap);
+}
+
+function buildTable(headers, rows) {
+    const wrap = el('div', { className: 'table-container' });
+    const table = el('table');
+    const headRow = el('tr');
+    headers.forEach((h) => headRow.appendChild(el('th', { text: h })));
+    const thead = el('thead');
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    const tbody = el('tbody');
+    rows.forEach((cells) => {
+        const tr = el('tr');
+        cells.forEach((c) => {
+            if (c instanceof Node) {
+                const td = el('td');
+                td.appendChild(c);
+                tr.appendChild(td);
+            } else {
+                tr.appendChild(el('td', { text: fmtVal(c) }));
+            }
+        });
+        tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
+}
+
+function addSection(container, title, content) {
+    const sec = el('div', { className: 'card-section' });
+    sec.appendChild(el('h3', { text: title }));
+    sec.appendChild(content);
+    container.appendChild(sec);
+}
+
+function fmtUptime(s) {
+    if (s == null) return null;
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return d ? `${d}d ${h}h` : (h ? `${h}h ${m}m` : `${m}m`);
+}
+
+function fmtRetention(r) {
+    if (!r || typeof r !== 'object') return null;
+    return Object.entries(r).map(([k, v]) => `${k}: ${v && typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
+}
+
+function renderVersions(ins) {
+    const rows = (ins.versions || []).map((v) => {
+        const badge = el('span', { className: v.outdated ? 'badge outdated' : 'badge up', text: v.outdated ? 'outdated' : 'latest' });
+        return [v.ext_version, v.users, v.errors, badge];
+    });
+    return buildTable(['Version', 'Users', `Errors (${fmtVal(ins.days)}d)`, ''], rows);
+}
+
+// Bars share one scale per card so days compare; the counts stay as text beside them.
+function renderTrend(trend) {
+    const max = Math.max(1, ...trend.map((d) => Math.max(d.errors || 0, d.client_errors || 0)));
+    const bar = (cls, n) => {
+        const cell = el('span', { className: 'trend-cell' });
+        const b = el('span', { className: `trend-bar ${cls}` });
+        b.style.width = `${Math.round(((n || 0) / max) * 100)}px`;
+        cell.appendChild(b);
+        cell.appendChild(document.createTextNode(` ${n || 0}`));
+        return cell;
+    };
+    return buildTable(['Day', '5xx', '4xx'], trend.map((d) => [
+        d.day ? new Date(d.day).toLocaleDateString() : '—', bar('err', d.errors), bar('warn', d.client_errors)
+    ]));
+}
+
+function renderInsights(container, ins) {
+    if (!ins) return;
+    if (Array.isArray(ins.versions) && ins.versions.length) {
+        addSection(container, `Extension versions (latest ${fmtVal(ins.latest_version)})`, renderVersions(ins));
+    }
+    if (Array.isArray(ins.trend) && ins.trend.length) {
+        addSection(container, `Errors per day (${fmtVal(ins.days)}d)`, renderTrend(ins.trend));
+    }
+    if (Array.isArray(ins.top_failing) && ins.top_failing.length) {
+        addSection(container, 'Top failing endpoints', buildTable(
+            ['Method', 'Path', 'Failures', '5xx'],
+            ins.top_failing.map((f) => [f.method, f.path, f.failures, f.server_errors])
+        ));
+    }
 }
 
 function renderCard(container, platform, side) {
@@ -226,8 +382,19 @@ function renderCard(container, platform, side) {
     } else {
         addField('Users total', null);
     }
+    const hd = side.health_details;
+    if (hd) {
+        addField('Uptime', fmtUptime(hd.uptime_s));
+        addField('Node', hd.node);
+        addField('Retention', fmtRetention(hd.retention));
+        if (hd.events) {
+            addField('Event rows', hd.events.total);
+            addField('Oldest event', hd.events.oldest ? new Date(hd.events.oldest).toLocaleString() : null);
+        }
+    }
     container.appendChild(grid);
 
+    renderInsights(container, side.insights);
     renderSlowTable(container, side.slow);
 }
 
@@ -266,9 +433,28 @@ function statusClass(status) {
     return 'status-ok';
 }
 
+function filterEventsByIp(platform, ip) {
+    platformFilter.value = platform;
+    resultFilter.value = 'any';
+    actionFilter.value = 'all';
+    userFilter.value = '';
+    qFilter.value = ip;
+    loadEvents();
+    eventsBody.closest('section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderEventStats(stats) {
+    if (!stats) {
+        eventsStats.textContent = '';
+        return;
+    }
+    eventsStats.textContent = `All time ${fmtVal(stats.all_time)} · today ${fmtVal(stats.today)} · matching ${fmtVal(stats.matching)} · failed ${fmtVal(stats.failed)} · distinct users ${fmtVal(stats.distinct_users)}`;
+}
+
 function renderEvents(data) {
     clear(eventsBody);
     clear(eventsErrors);
+    renderEventStats(data.stats);
 
     if (data.errors && Object.keys(data.errors).length) {
         const lines = Object.entries(data.errors).map(([k, v]) => `${k}: ${v}`);
@@ -301,7 +487,13 @@ function renderEvents(data) {
 
         tr.appendChild(el('td', { text: `${fmtVal(ev.method)} ${fmtVal(ev.path)}` }));
         tr.appendChild(el('td', { text: fmtVal(ev.email) }));
-        tr.appendChild(el('td', { text: fmtVal(ev.reason || ev.error) }));
+        const reason = [ev.reason || ev.error, ev.server_error].filter(Boolean).join(' · ');
+        tr.appendChild(el('td', { text: fmtVal(reason) }));
+        tr.appendChild(el('td', { text: fmtVal(ev.ip) }));
+        const agentTd = el('td', { className: 'cell-clip', text: fmtVal(ev.user_agent) });
+        if (ev.user_agent) agentTd.title = ev.user_agent;
+        tr.appendChild(agentTd);
+        tr.appendChild(el('td', { text: fmtVal(ev.ext_version) }));
         tr.appendChild(el('td', { text: fmtVal(ev.duration_ms) }));
 
         eventsBody.appendChild(tr);
@@ -309,20 +501,411 @@ function renderEvents(data) {
 }
 
 async function loadEvents() {
-    if (eventsInFlight) return;
+    if (eventsInFlight) {
+        eventsReload = true;
+        return;
+    }
     eventsInFlight = true;
     try {
         const platform = platformFilter.value;
-        const res = await api(`/api/events?platform=${encodeURIComponent(platform)}&limit=100`);
-        if (!res.ok) return;
+        const params = new URLSearchParams({ platform, limit: '100' });
+        if (resultFilter.value !== 'any') params.set('result', resultFilter.value);
+        if (actionFilter.value !== 'all') params.set('action', actionFilter.value);
+        if (userFilter.value.trim()) params.set('user', userFilter.value.trim());
+        if (qFilter.value.trim()) params.set('q', qFilter.value.trim());
+        const res = await api(`/api/events?${params}`);
+        if (!res.ok) {
+            clear(eventsErrors);
+            const warn = el('div', { className: 'alert-row warning' });
+            warn.appendChild(el('span', { text: 'Events not loaded' + (res.status === 400 ? ': check the filters' : '') }));
+            eventsErrors.appendChild(warn);
+            return;
+        }
         const data = await res.json();
         renderEvents(data);
     } catch (err) {
         // handled above
     } finally {
         eventsInFlight = false;
+        if (eventsReload) {
+            eventsReload = false;
+            loadEvents();
+        }
     }
 }
+
+// ---- Users ----
+
+let usersData = [];
+
+function when(v) {
+    return v ? new Date(v).toLocaleString() : null;
+}
+
+function renderUsers() {
+    clear(usersBody);
+    const needle = usersSearch.value.trim().toLowerCase();
+    const status = usersStatus.value;
+    const key = usersSort.value;
+    const rows = usersData
+        .filter((u) => (!needle || String(u.email || '').toLowerCase().includes(needle)) && (!status || u.status === status))
+        .sort((a, b) => {
+            if (key === 'email') return String(a.email).localeCompare(String(b.email));
+            if (key === 'ghost_sessions') return (b.ghost_sessions || 0) - (a.ghost_sessions || 0);
+            return Date.parse(b[key] || 0) - Date.parse(a[key] || 0);
+        });
+    for (const u of rows) {
+        const tr = el('tr');
+        tr.appendChild(el('td', { text: fmtVal(u.email) }));
+        const st = el('td');
+        st.appendChild(el('span', { className: `badge ${u.status === 'active' ? 'up' : 'down'}`, text: fmtVal(u.status) }));
+        tr.appendChild(st);
+        tr.appendChild(el('td', { text: fmtVal(u.plan) }));
+        tr.appendChild(el('td', { text: `${fmtVal(u.active_sessions)} / ${fmtVal(u.max_devices)}` }));
+        tr.appendChild(el('td', { text: fmtVal(u.ghost_sessions) }));
+        tr.appendChild(el('td', { text: fmtVal(when(u.last_seen)) }));
+        tr.appendChild(el('td', { text: fmtVal(when(u.last_login)) }));
+        tr.appendChild(el('td', { text: fmtVal(u.ext_version) }));
+        const issue = u.last_issue ? `${fmtVal(u.last_issue.status)} ${fmtVal(u.last_issue.path)} ${u.last_issue.reason || u.last_issue.error || ''}`.trim() : null;
+        const issueTd = el('td', { className: 'cell-clip', text: fmtVal(issue) });
+        if (issue) issueTd.title = `${issue} (${when(u.last_issue.created_at) || ''})`;
+        tr.appendChild(issueTd);
+        tr.appendChild(el('td', { text: u.reset_link ? `${u.reset_link.status}${u.reset_link.expires_at ? ' until ' + when(u.reset_link.expires_at) : ''}` : '—' }));
+        usersBody.appendChild(tr);
+    }
+    usersNote.textContent = `${rows.length} of ${usersData.length} users`;
+}
+
+async function loadUsers() {
+    usersNote.textContent = 'Loading...';
+    try {
+        const res = await api(`/api/users?platform=${encodeURIComponent(usersPlatform.value)}`);
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            usersData = [];
+            clear(usersBody);
+            usersNote.textContent = `Could not load users: ${data.error || 'HTTP ' + res.status}`;
+            return;
+        }
+        usersData = (await res.json()).users || [];
+        const statuses = [...new Set(usersData.map((u) => u.status).filter(Boolean))].sort();
+        clear(usersStatus);
+        const any = el('option', { text: 'Any status' });
+        any.value = '';
+        usersStatus.appendChild(any);
+        statuses.forEach((s) => {
+            const o = el('option', { text: s });
+            o.value = s;
+            usersStatus.appendChild(o);
+        });
+        renderUsers();
+    } catch (err) {
+        usersNote.textContent = 'Could not reach server';
+    }
+}
+
+document.getElementById('users-load').addEventListener('click', loadUsers);
+usersPlatform.addEventListener('change', loadUsers);
+usersSearch.addEventListener('input', renderUsers);
+usersStatus.addEventListener('change', renderUsers);
+usersSort.addEventListener('change', renderUsers);
+
+// ---- Panels that load when opened ----
+
+const platformName = (p) => (p === 'tiktok' ? 'TikTok' : (p === 'instagram' ? 'Instagram' : fmtVal(p)));
+
+function platformBadge(p) {
+    return el('span', { className: `badge platform-${p}`, text: platformName(p) });
+}
+
+function warnLines(box, lines) {
+    lines.forEach((line) => box.appendChild(el('p', { className: 'note-warning', text: line })));
+}
+
+function errorLines(errors) {
+    return Object.entries(errors || {}).map(([p, msg]) => `${platformName(p)}: ${msg}`);
+}
+
+// A later request wins, so a slow answer to an old filter can't overwrite a newer one.
+function panelLoader(note, box, url, render) {
+    let latest = 0;
+    return async () => {
+        const mine = ++latest;
+        note.textContent = 'Loading...';
+        try {
+            const res = await api(url());
+            const data = await res.json().catch(() => ({}));
+            if (mine !== latest) return;
+            clear(box);
+            if (!res.ok) {
+                note.textContent = `Could not load: ${data.error || 'HTTP ' + res.status}`;
+                return;
+            }
+            render(data);
+        } catch (err) {
+            if (mine === latest && err.message !== 'unauthorized') note.textContent = 'Could not reach server';
+        }
+    };
+}
+
+function wirePanel(id, box, load) {
+    const panel = document.getElementById(id);
+    panel.addEventListener('toggle', () => {
+        if (panel.open) load();
+        else clear(box);
+    });
+}
+
+// Usage
+
+const usagePlatform = document.getElementById('usage-platform');
+const usageDays = document.getElementById('usage-days');
+const usageSearch = document.getElementById('usage-search');
+const usageSort = document.getElementById('usage-sort');
+const usageNote = document.getElementById('usage-note');
+const usageBox = document.getElementById('usage-box');
+let usageData = null;
+
+function renderUsage() {
+    clear(usageBox);
+    if (!usageData) return;
+    const d = usageData;
+    const needle = usageSearch.value.trim().toLowerCase();
+    const key = usageSort.value;
+    const rows = (d.users || [])
+        .filter((u) => !needle || String(u.email || '').toLowerCase().includes(needle))
+        .sort((a, b) => (key === 'email' ? String(a.email).localeCompare(String(b.email)) : (b[key] || 0) - (a[key] || 0)));
+    usageNote.textContent = `${rows.length} of ${(d.users || []).length} users. Sessions, jobs, API calls and comments cover the last ${fmtVal(d.days)} days; saved posts and projects are all-time. Sizes are row counts, not bytes. A job is stuck after ${fmtVal(d.stuck_after_minutes)} minutes running.`;
+
+    if ((d.top_users || []).length) {
+        addSection(usageBox, 'Top users', buildTable(
+            ['Email', 'Score (jobs + API calls)', 'Jobs', 'API calls'],
+            d.top_users.map((u) => [u.email, u.usage_score, u.jobs_total, u.api_calls])
+        ));
+    }
+    const stuck = (d.users || []).filter((u) => u.jobs_stuck > 0);
+    if (stuck.length) {
+        addSection(usageBox, 'Users with stuck jobs', buildTable(['Email', 'Stuck jobs'], stuck.map((u) => [u.email, u.jobs_stuck])));
+    }
+    if ((d.failed_jobs || []).length) {
+        addSection(usageBox, `Failed jobs (newest ${d.failed_jobs.length})`, buildTable(
+            ['Time', 'Email', 'Post', 'Retries', 'Error'],
+            d.failed_jobs.map((j) => {
+                const err = el('span', { className: 'cell-clip clip-inline', text: fmtVal(j.error_message) });
+                if (j.error_message) err.title = j.error_message;
+                return [when(j.created_at), j.email, j.post_shortcode, `${fmtVal(j.retry_count)} / ${fmtVal(j.max_retries)}`, err];
+            })
+        ));
+    }
+    const isTiktok = d.platform === 'tiktok';
+    addSection(usageBox, 'Per user', buildTable(
+        ['Email', 'Plan', 'Status', 'Sessions', 'Jobs', 'Failed', 'Stuck', 'API calls', 'Comments', 'Saved posts', 'Projects'].concat(isTiktok ? ['Videos', 'Keywords', 'Video comments'] : []),
+        rows.map((u) => [
+            u.email, u.plan, u.status, u.sessions, u.jobs_total, u.jobs_failed, u.jobs_stuck, u.api_calls, u.comments_scraped, u.saved_posts, u.projects,
+        ].concat(isTiktok ? [u.videos, u.keywords, u.tiktok_comments] : []))
+    ));
+}
+
+const loadUsage = panelLoader(usageNote, usageBox,
+    () => `/api/usage?${new URLSearchParams({ platform: usagePlatform.value, days: usageDays.value })}`,
+    (data) => {
+        usageData = data;
+        renderUsage();
+    });
+// Forgets the old rows first, so typing in the search box after a failed load can't bring them back.
+function reloadUsage() {
+    usageData = null;
+    loadUsage();
+}
+wirePanel('usage-panel', usageBox, reloadUsage);
+usagePlatform.addEventListener('change', reloadUsage);
+usageDays.addEventListener('change', reloadUsage);
+usageSearch.addEventListener('input', renderUsage);
+usageSort.addEventListener('change', renderUsage);
+
+// Expiring plans
+
+const expiringDays = document.getElementById('expiring-days');
+const expiringNote = document.getElementById('expiring-note');
+const expiringBox = document.getElementById('expiring-box');
+
+const loadExpiring = panelLoader(expiringNote, expiringBox,
+    () => `/api/expiring?${new URLSearchParams({ days: expiringDays.value })}`,
+    (d) => {
+        const users = d.users || [];
+        expiringNote.textContent = `${users.length} lapsed or lapsing within ${fmtVal(d.days)} days. This is information only: an expired plan does not block login.`;
+        warnLines(expiringBox, errorLines(d.errors));
+        (d.columns_missing || []).forEach((p) => warnLines(expiringBox, [`${platformName(p)}: expiry dates are not available until migration v8_plan_expiry.sql is applied.`]));
+        if (!users.length) return;
+        expiringBox.appendChild(buildTable(
+            ['Platform', 'Email', 'Plan', 'Status', 'State', 'Lapses', 'Plan expires', 'Trial ends'],
+            users.map((u) => [
+                platformBadge(u.platform), u.email, u.plan, u.status,
+                el('span', { className: u.lapsed ? 'badge down' : 'badge outdated', text: u.lapsed ? 'lapsed' : 'lapsing' }),
+                when(u.lapses_at), when(u.plan_expires_at), when(u.trial_ends_at),
+            ])
+        ));
+    });
+wirePanel('expiring-panel', expiringBox, loadExpiring);
+expiringDays.addEventListener('change', loadExpiring);
+
+// Audit log
+
+const auditPlatform = document.getElementById('audit-platform');
+const auditAction = document.getElementById('audit-action');
+const auditSince = document.getElementById('audit-since');
+const auditQ = document.getElementById('audit-q');
+const auditNote = document.getElementById('audit-note');
+const auditBox = document.getElementById('audit-box');
+
+function fillAuditActions(actions) {
+    const current = auditAction.value;
+    clear(auditAction);
+    const any = el('option', { text: 'Any action' });
+    any.value = '';
+    auditAction.appendChild(any);
+    [...new Set(actions.concat(current ? [current] : []))].sort().forEach((a) => {
+        const o = el('option', { text: a });
+        o.value = a;
+        auditAction.appendChild(o);
+    });
+    auditAction.value = current;
+}
+
+function auditUrl() {
+    const params = new URLSearchParams({ platform: auditPlatform.value, limit: '200' });
+    if (auditAction.value) params.set('action', auditAction.value);
+    if (auditSince.value) params.set('since', new Date(Date.now() - Number(auditSince.value) * 86400000).toISOString());
+    if (auditQ.value.trim()) params.set('q', auditQ.value.trim());
+    return `/api/audit?${params}`;
+}
+
+const loadAudit = panelLoader(auditNote, auditBox, auditUrl, (d) => {
+    const rows = d.rows || [];
+    auditNote.textContent = `${rows.length} entries. The actor is the admin's email for account sign-ins, or shared-password when the shared password was used.`;
+    fillAuditActions(d.actions || []);
+    warnLines(auditBox, errorLines(d.errors));
+    (d.table_missing || []).forEach((p) => warnLines(auditBox, [`${platformName(p)}: nothing is being recorded until migration v7_admin_audit.sql is applied.`]));
+    if (!rows.length) return;
+    auditBox.appendChild(buildTable(
+        ['Time', 'Platform', 'Action', 'Actor', 'Target', 'IP', 'Detail'],
+        rows.map((r) => {
+            const text = r.detail && Object.keys(r.detail).length ? JSON.stringify(r.detail) : '';
+            const detail = el('span', { className: 'cell-clip clip-inline', text: fmtVal(text) });
+            if (text) detail.title = text;
+            return [when(r.created_at), platformBadge(r.platform), r.action, r.actor, r.target_email, r.ip, detail];
+        })
+    ));
+});
+wirePanel('audit-panel', auditBox, loadAudit);
+let auditTimer = null;
+auditPlatform.addEventListener('change', loadAudit);
+auditAction.addEventListener('change', loadAudit);
+auditSince.addEventListener('change', loadAudit);
+auditQ.addEventListener('input', () => {
+    clearTimeout(auditTimer);
+    auditTimer = setTimeout(loadAudit, 400);
+});
+
+// Blocked IPs
+
+const blocksPanel = document.getElementById('blocks-panel');
+const blocksNote = document.getElementById('blocks-note');
+const blocksBox = document.getElementById('blocks-box');
+
+async function unblockIp(platform, ip) {
+    if (!confirm(`Unblock ${ip} on ${platformName(platform)}? Logins from it will be allowed again.`)) return;
+    try {
+        const res = await api(`/api/blocked-ips/${encodeURIComponent(platform)}/${encodeURIComponent(ip)}`, { method: 'DELETE' });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            blocksNote.textContent = `Could not unblock ${ip}: ${data.error || 'HTTP ' + res.status}`;
+            return;
+        }
+        loadBlocks();
+    } catch (err) {
+        if (err.message !== 'unauthorized') blocksNote.textContent = 'Could not reach server';
+    }
+}
+
+const loadBlocks = panelLoader(blocksNote, blocksBox, () => '/api/blocked-ips', (d) => {
+    const blocks = d.blocks || [];
+    blocksNote.textContent = `${blocks.length} blocked. Blocks stop login only.`;
+    warnLines(blocksBox, errorLines(d.errors));
+    (d.table_missing || []).forEach((p) => warnLines(blocksBox, [`${platformName(p)}: IP blocking is not available until its migration is applied.`]));
+    if (!blocks.length) return;
+    blocksBox.appendChild(buildTable(
+        ['Platform', 'IP', 'Reason', 'Blocked by', 'Since', 'Until', ''],
+        blocks.map((b) => {
+            const btn = el('button', { className: 'btn', text: 'Unblock' });
+            btn.type = 'button';
+            btn.addEventListener('click', () => unblockIp(b.platform, b.ip));
+            return [platformBadge(b.platform), b.ip, b.reason, b.blocked_by, when(b.created_at), when(b.expires_at), btn];
+        })
+    ));
+});
+wirePanel('blocks-panel', blocksBox, loadBlocks);
+
+// Block dialog. It sits outside the alerts strip, so the 30 s refresh can't replace it mid-decision.
+
+const blockDialog = document.getElementById('block-dialog');
+const blockHours = document.getElementById('block-hours');
+const blockReason = document.getElementById('block-reason');
+const blockSummary = document.getElementById('block-summary');
+const blockError = document.getElementById('block-error');
+const blockConfirm = document.getElementById('block-confirm');
+let blockTarget = null;
+
+function updateBlockSummary() {
+    if (!blockTarget) return;
+    const duration = blockHours.options[blockHours.selectedIndex].textContent;
+    blockSummary.textContent = `Block ${blockTarget.ip} from logging in to ${platformName(blockTarget.platform)} for ${duration}?`;
+}
+
+function openBlockDialog(platform, ip) {
+    blockTarget = { platform, ip };
+    blockHours.value = '24';
+    blockReason.value = '';
+    blockError.classList.add('hidden');
+    blockConfirm.disabled = false;
+    updateBlockSummary();
+    blockDialog.showModal();
+}
+
+blockHours.addEventListener('change', updateBlockSummary);
+document.getElementById('block-cancel').addEventListener('click', () => blockDialog.close());
+
+document.getElementById('block-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    blockError.classList.add('hidden');
+    blockConfirm.disabled = true;
+    try {
+        const res = await api('/api/blocked-ips', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ...blockTarget, hours: Number(blockHours.value), reason: blockReason.value.trim() || undefined }),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            blockError.textContent = data.error || `HTTP ${res.status}`;
+            blockError.classList.remove('hidden');
+            return;
+        }
+        blockDialog.close();
+        if (blocksPanel.open) loadBlocks();
+        else blocksPanel.open = true;
+        blocksPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+        if (err.message === 'unauthorized') {
+            blockDialog.close();
+            return;
+        }
+        blockError.textContent = 'Could not reach server';
+        blockError.classList.remove('hidden');
+    } finally {
+        blockConfirm.disabled = false;
+    }
+});
 
 // ---- Checks ----
 
@@ -378,6 +961,7 @@ async function runChecks() {
 function refreshAll() {
     loadOverview();
     loadEvents();
+    loadAdminLinks();
 }
 
 function startAutoRefresh() {
@@ -401,9 +985,25 @@ function wireStudioLinks() {
     document.getElementById('studio-insta').href = `http://${location.hostname}:5556`;
 }
 
+// Links to each backend's own admin page. Until /api/links answers (or when no address is configured)
+// they point at this page's own host on the backend's port, like the Studio links.
+function wireAdminLinks(links) {
+    const l = links || {};
+    document.getElementById('admin-tiktok').href = l.tiktok || `http://${location.hostname}:8443/admin.html`;
+    document.getElementById('admin-insta').href = l.instagram || `http://${location.hostname}:8442/admin.html`;
+}
+
+async function loadAdminLinks() {
+    try {
+        const res = await api('/api/links');
+        if (res.ok) wireAdminLinks(await res.json());
+    } catch (e) { /* keep the fallback links */ }
+}
+
 // ---- Boot ----
 
 wireStudioLinks();
+wireAdminLinks();
 
 if (password) {
     showApp();

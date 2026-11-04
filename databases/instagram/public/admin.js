@@ -75,13 +75,12 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAuth();
 
     async function checkAuth() {
-        const password = sessionStorage.getItem('adminPassword');
-        if (password) {
+        if (hasAdminSession()) {
             loginOverlay.classList.add('hidden');
             adminContainer.classList.remove('blurred');
             // Activity rows need allUsers loaded first (plan / "no account" sub-line).
             await fetchUsers();
-            if (!sessionStorage.getItem('adminPassword')) return; // fetchUsers hit a 401 and logged us out
+            if (!hasAdminSession()) return; // fetchUsers hit a 401 and logged us out
             fetchActivity();
             startInsightsRefresh();
             activityAutoRefreshToggle.checked = getAutoRefreshPref();
@@ -95,15 +94,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function getHeaders() {
-        return {
-            'Content-Type': 'application/json',
-            'x-admin-password': sessionStorage.getItem('adminPassword')
-        };
+        const token = sessionStorage.getItem('adminToken');
+        return token
+            ? { 'Content-Type': 'application/json', 'x-admin-token': token }
+            : { 'Content-Type': 'application/json', 'x-admin-password': sessionStorage.getItem('adminPassword') };
+    }
+
+    // Signed in with either the shared password or an account's token.
+    function hasAdminSession() {
+        return !!(sessionStorage.getItem('adminPassword') || sessionStorage.getItem('adminToken'));
+    }
+
+    function clearAdminSession() {
+        sessionStorage.removeItem('adminPassword');
+        sessionStorage.removeItem('adminToken');
     }
 
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const pwd = document.getElementById('admin-password').value;
+        const email = document.getElementById('admin-email').value.trim();
         const submitBtn = loginForm.querySelector('.submit-btn');
 
         try {
@@ -114,12 +124,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch('/api/admin/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: pwd })
+                body: JSON.stringify(email ? { email, password: pwd } : { password: pwd })
             });
 
-            if (!res.ok) throw new Error('Incorrect password');
+            if (!res.ok) {
+                const failure = await res.json().catch(() => ({}));
+                throw new Error(failure.error || 'Incorrect password');
+            }
 
-            sessionStorage.setItem('adminPassword', pwd);
+            clearAdminSession();
+            if (email) {
+                const data = await res.json();
+                sessionStorage.setItem('adminToken', data.token);
+            } else {
+                sessionStorage.setItem('adminPassword', pwd);
+            }
             checkAuth();
         } catch (err) {
             loginError.textContent = err.message;
@@ -148,11 +167,40 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    searchInput.addEventListener('input', (e) => {
-        const term = e.target.value.toLowerCase();
-        const filtered = allUsers.filter(u => u.email.toLowerCase().includes(term));
-        renderUsers(filtered);
-    });
+    const filterStatus = document.getElementById('filter-user-status');
+    const filterPlan = document.getElementById('filter-user-plan');
+    const sortUsers = document.getElementById('sort-users');
+
+    // Search + status/plan filters + sort, applied together to the cached user list.
+    function applyUserFilters() {
+        const term = searchInput.value.trim().toLowerCase();
+        const time = (v) => (v ? new Date(v).getTime() : 0);
+        const sorters = {
+            created_desc: (a, b) => time(b.created_at) - time(a.created_at),
+            created_asc: (a, b) => time(a.created_at) - time(b.created_at),
+            email_asc: (a, b) => (a.email || '').localeCompare(b.email || ''),
+            login_desc: (a, b) => time(b.last_login) - time(a.last_login),
+            login_asc: (a, b) => time(a.last_login) - time(b.last_login),
+        };
+        const rows = allUsers
+            .filter(u => (u.email || '').toLowerCase().includes(term))
+            .filter(u => !filterStatus.value || u.status === filterStatus.value)
+            .filter(u => !filterPlan.value || u.plan === filterPlan.value)
+            .sort(sorters[sortUsers.value] || sorters.created_desc);
+        renderUsers(rows);
+    }
+
+    // Fill a filter dropdown with the distinct values present in the data, keeping the current choice.
+    function fillFilterOptions(select, values, allLabel) {
+        const current = select.value;
+        select.innerHTML = '';
+        select.add(new Option(allLabel, ''));
+        [...new Set(values.filter(Boolean))].sort().forEach(v => select.add(new Option(v, v)));
+        select.value = [...select.options].some(o => o.value === current) ? current : '';
+    }
+
+    searchInput.addEventListener('input', applyUserFilters);
+    [filterStatus, filterPlan, sortUsers].forEach(el => el.addEventListener('change', applyUserFilters));
 
     addUserForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -175,6 +223,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const payload = { email, plan, status, max_devices: maxDevices };
             if (password) payload.password = password;
+            // Dates are only sent when set, or when clearing one that was set, so nothing changes before migration v8.
+            [['plan-expires', 'plan_expires_at'], ['trial-ends', 'trial_ends_at']].forEach(([id, key]) => {
+                const v = document.getElementById(id).value;
+                if (v) payload[key] = v;
+                else if (isEdit && userToEdit[key]) payload[key] = null;
+            });
 
             const res = await fetch(url, {
                 method,
@@ -185,13 +239,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 throw new Error('Session expired. Please login again.');
             }
+            if (!res.ok) throw new Error(data.error || `Could not save the user (HTTP ${res.status})`);
 
             // Success
-            showToast(`User ${email} created successfully`, 'success');
+            showToast(`User ${email} ${isEdit ? 'saved' : 'created'} successfully`, 'success');
             closeAllModals();
             addUserForm.reset();
             fetchUsers(); // Refresh list
@@ -221,7 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 throw new Error('Session expired');
             }
@@ -257,7 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 throw new Error('Session expired');
             }
@@ -294,7 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function startAutoRefresh() {
         stopAutoRefresh();
         autoRefreshTimer = setInterval(() => {
-            if (!sessionStorage.getItem('adminPassword')) return;
+            if (!hasAdminSession()) return;
             fetchActivity(true);
         }, 30000);
     }
@@ -416,7 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 return;
             }
@@ -449,13 +504,13 @@ document.addEventListener('DOMContentLoaded', () => {
             historyLoading.classList.remove('hidden');
 
             // Legacy `email` param — still supported by the events endpoint.
-            const res = await fetch(`/api/admin/events?email=${encodeURIComponent(email)}&limit=100`, {
+            const res = await fetch(`/api/admin/events?user=${encodeURIComponent(email)}&limit=100`, {
                 headers: getHeaders()
             });
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 return;
             }
@@ -743,7 +798,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 return;
             }
@@ -809,7 +864,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function adminGet(url) {
         const res = await fetch(url, { headers: getHeaders() });
-        if (res.status === 401) { sessionStorage.removeItem('adminPassword'); checkAuth(); throw new Error('Signed out'); }
+        if (res.status === 401) { clearAdminSession(); checkAuth(); throw new Error('Signed out'); }
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Request failed');
         return data;
@@ -835,14 +890,260 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // ---- Usage ----
+    const usageDays = document.getElementById('usage-days');
+    const usageSearch = document.getElementById('usage-search');
+    let usageData = null;
+
+    function renderUsage() {
+        if (!usageData) return;
+        const d = usageData;
+        const EXTRA_LABELS = { videos: 'Videos', keywords: 'Keywords', tiktok_comments: 'TikTok comments' };
+        const extras = ['videos', 'keywords', 'tiktok_comments'].filter(k => d.users.length && k in d.users[0]);
+        document.getElementById('usage-note').textContent =
+            `Last ${d.days} days for activity; totals for saved posts and the rows below (storage is counted in rows, not bytes). ` +
+            `A job still running after ${d.stuck_after_minutes} min counts as stuck. Score = jobs + API calls.`;
+        document.getElementById('usage-top').innerHTML = miniTable(
+            ['User', 'Jobs', 'API calls', 'Comments'],
+            d.top_users.map(u => [esc(u.email), u.jobs_total, u.api_calls, u.comments_scraped]));
+        document.getElementById('usage-failed').innerHTML = miniTable(
+            ['User', 'Post', 'Retries', 'Error'],
+            d.failed_jobs.map(j => [esc(j.email), esc(j.post_shortcode), `${j.retry_count}/${j.max_retries}`,
+                `<span class="last-good" title="${esc(j.error_message)}">${esc((j.error_message || '').slice(0, 60))}</span>`]));
+        const term = usageSearch.value.trim().toLowerCase();
+        const rows = d.users.filter(u => (u.email || '').toLowerCase().includes(term));
+        document.getElementById('usage-users').innerHTML = miniTable(
+            ['User', 'Plan', 'Sessions', 'Jobs', 'Failed', 'Stuck', 'API calls', 'Comments', 'Saved posts', 'Projects', ...extras.map(k => EXTRA_LABELS[k])],
+            rows.map(u => [esc(u.email), esc(u.plan), u.sessions, u.jobs_total, u.jobs_failed,
+                u.jobs_stuck ? `<span class="badge badge-warning">${u.jobs_stuck}</span>` : 0,
+                u.api_calls, u.comments_scraped, u.saved_posts, u.projects, ...extras.map(k => u[k])]));
+    }
+
+    async function fetchUsage() {
+        const err = document.getElementById('usage-error');
+        try {
+            err.classList.add('hidden');
+            usageData = await adminGet(`/api/admin/usage?days=${encodeURIComponent(usageDays.value)}`);
+            renderUsage();
+        } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove('hidden');
+        }
+    }
+    usageDays.addEventListener('change', fetchUsage);
+    usageSearch.addEventListener('input', renderUsage);
+
+    // ---- Audit log ----
+    const auditSearch = document.getElementById('audit-search');
+    const auditAction = document.getElementById('audit-action');
+
+    async function fetchAudit() {
+        const err = document.getElementById('audit-error');
+        try {
+            err.classList.add('hidden');
+            const params = new URLSearchParams({ limit: '100' });
+            if (auditAction.value) params.set('action', auditAction.value);
+            if (auditSearch.value.trim()) params.set('q', auditSearch.value.trim());
+            const d = await adminGet(`/api/admin/audit?${params}`);
+            if (auditAction.options.length === 1) d.actions.forEach(a => auditAction.add(new Option(a, a)));
+            if (d.table_missing) {
+                document.getElementById('audit-table').innerHTML = '<div class="last-good">Audit log is not set up yet: apply migrations/v7_admin_audit.sql. Actions are not being recorded until then.</div>';
+                return;
+            }
+            document.getElementById('audit-table').innerHTML = miniTable(
+                ['When', 'Who', 'Action', 'Target', 'IP', 'Detail'],
+                d.rows.map(r => [
+                    `<span title="${esc(new Date(r.created_at).toLocaleString())}">${esc(relativeTime(r.created_at))}</span>`,
+                    esc(r.actor), esc(r.action), esc(r.target_email), esc(r.ip),
+                    `<span class="last-good">${esc(JSON.stringify(r.detail || {}))}</span>`,
+                ]));
+        } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove('hidden');
+        }
+    }
+    let auditTimer = null;
+    auditAction.addEventListener('change', fetchAudit);
+    auditSearch.addEventListener('input', () => { clearTimeout(auditTimer); auditTimer = setTimeout(fetchAudit, 300); });
+    document.getElementById('audit-refresh-btn').addEventListener('click', fetchAudit);
+
+    // ---- Elements built with textContent only ----
+    function node(tag, text, className) {
+        const n = document.createElement(tag);
+        if (text !== undefined && text !== null) n.textContent = String(text);
+        if (className) n.className = className;
+        return n;
+    }
+
+    function actionBtn(label, onClick, danger) {
+        const b = node('button', label, `btn ${danger ? 'danger-btn' : 'secondary-btn'}`);
+        b.type = 'button';
+        b.addEventListener('click', onClick);
+        return b;
+    }
+
+    // Each cell is text or a DOM node.
+    function fillTable(container, head, rows, emptyText) {
+        container.replaceChildren();
+        if (!rows.length) { container.appendChild(node('div', emptyText, 'last-good')); return; }
+        const table = node('table', undefined, 'mini-table');
+        const headRow = table.createTHead().insertRow();
+        head.forEach(h => headRow.appendChild(node('th', h)));
+        const body = table.createTBody();
+        rows.forEach(cells => {
+            const tr = body.insertRow();
+            cells.forEach(c => {
+                const td = tr.insertCell();
+                if (c instanceof Node) td.appendChild(c); else td.textContent = c === null || c === undefined ? '' : String(c);
+            });
+        });
+        container.appendChild(table);
+    }
+
+    function when(value) {
+        return value ? new Date(value).toLocaleString() : '';
+    }
+
+    // Sends a change; returns the parsed body, or null after showing the error.
+    async function adminSend(url, method, body) {
+        try {
+            const res = await fetch(url, { method, headers: getHeaders(), body: body ? JSON.stringify(body) : undefined });
+            if (res.status === 401) { clearAdminSession(); checkAuth(); return null; }
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) { showToast(data.error || 'Request failed', 'error'); return null; }
+            return data;
+        } catch (e) {
+            showToast('Could not reach the server', 'error');
+            return null;
+        }
+    }
+
+    // ---- Blocked IPs ----
+    const blockNote = document.getElementById('blocks-note');
+
+    async function fetchBlocks() {
+        const err = document.getElementById('blocks-error');
+        try {
+            err.classList.add('hidden');
+            const d = await adminGet('/api/admin/blocked-ips');
+            blockNote.classList.toggle('hidden', !d.table_missing);
+            blockNote.textContent = d.table_missing ? 'IP blocking is not set up yet: apply migrations/v10_blocked_ips.sql.' : '';
+            fillTable(document.getElementById('blocks-table'), ['IP', 'Reason', 'Blocked by', 'Since', 'Expires', ''],
+                d.blocks.map(b => [b.ip, b.reason, b.blocked_by, when(b.created_at), when(b.expires_at),
+                    actionBtn('Unblock', async () => {
+                        if (await adminSend(`/api/admin/blocked-ips/${encodeURIComponent(b.ip)}`, 'DELETE')) { showToast(`Unblocked ${b.ip}`); fetchBlocks(); fetchAudit(); }
+                    })]),
+                'No addresses are blocked.');
+        } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove('hidden');
+        }
+    }
+
+    document.getElementById('block-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const ip = document.getElementById('block-ip');
+        const reason = document.getElementById('block-reason');
+        const hours = Number(document.getElementById('block-hours').value);
+        if (await adminSend('/api/admin/blocked-ips', 'POST', { ip: ip.value.trim(), reason: reason.value, hours })) {
+            showToast(`Blocked ${ip.value.trim()}`);
+            ip.value = '';
+            reason.value = '';
+            fetchBlocks();
+            fetchAudit();
+        }
+    });
+
+    // ---- Admin accounts ----
+    const adminsNote = document.getElementById('admins-note');
+    const adminPasswordEditor = document.getElementById('admin-password-editor');
+    let adminPasswordTarget = null;
+
+    function closePasswordEditor() {
+        adminPasswordTarget = null;
+        adminPasswordEditor.classList.add('hidden');
+        document.getElementById('admin-new-password').value = '';
+    }
+
+    async function fetchAdmins() {
+        const err = document.getElementById('admins-error');
+        try {
+            err.classList.add('hidden');
+            const d = await adminGet('/api/admin/accounts');
+            adminsNote.classList.toggle('hidden', !d.table_missing);
+            adminsNote.textContent = d.table_missing ? 'Admin accounts are not set up yet: apply migrations/v9_admin_accounts.sql. The shared password keeps working.' : '';
+            fillTable(document.getElementById('admins-table'), ['Email', 'Name', 'Status', 'Last login', 'Created by', ''],
+                d.accounts.map(a => {
+                    const isMe = a.id === d.me;
+                    const actions = node('div');
+                    actions.appendChild(actionBtn('New password', () => {
+                        adminPasswordTarget = a;
+                        document.getElementById('admin-password-for').textContent = `New password for ${a.email}${isMe ? ' (you will need to sign in again)' : ''}`;
+                        adminPasswordEditor.classList.remove('hidden');
+                        document.getElementById('admin-new-password').focus();
+                    }));
+                    if (!isMe) {
+                        actions.appendChild(actionBtn(a.disabled_at ? 'Enable' : 'Disable', async () => {
+                            if (await adminSend(`/api/admin/accounts/${a.id}`, 'PATCH', { disabled: !a.disabled_at })) { fetchAdmins(); fetchAudit(); }
+                        }));
+                        actions.appendChild(actionBtn('Delete', async () => {
+                            if (!window.confirm(`Delete the admin account ${a.email}?`)) return;
+                            if (await adminSend(`/api/admin/accounts/${a.id}`, 'DELETE')) { showToast(`Deleted ${a.email}`); fetchAdmins(); fetchAudit(); }
+                        }, true));
+                    }
+                    return [a.email + (isMe ? ' (you)' : ''), a.name, a.disabled_at ? 'Disabled' : 'Active', when(a.last_login), a.created_by, actions];
+                }),
+                'No admin accounts yet. Everyone is using the shared password.');
+        } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove('hidden');
+        }
+    }
+
+    document.getElementById('admin-create-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('admin-new-email');
+        const name = document.getElementById('admin-new-name');
+        const password = document.getElementById('admin-new-account-password');
+        if (await adminSend('/api/admin/accounts', 'POST', { email: email.value, name: name.value, password: password.value })) {
+            showToast(`Created ${email.value.trim()}`);
+            email.value = '';
+            name.value = '';
+            password.value = '';
+            fetchAdmins();
+            fetchAudit();
+        }
+    });
+
+    document.getElementById('admin-password-cancel').addEventListener('click', closePasswordEditor);
+    adminPasswordEditor.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!adminPasswordTarget) return;
+        const target = adminPasswordTarget;
+        const password = document.getElementById('admin-new-password').value;
+        if (await adminSend(`/api/admin/accounts/${target.id}`, 'PATCH', { password })) {
+            showToast(`Password changed for ${target.email}`);
+            closePasswordEditor();
+            fetchAdmins();
+            fetchAudit();
+        }
+    });
+
     function startInsightsRefresh() {
         if (insightsTimer) clearInterval(insightsTimer);
         fetchInsights();
         fetchAlerts();
+        fetchUsage();
+        fetchAudit();
+        fetchBlocks();
+        fetchAdmins();
         insightsTimer = setInterval(() => {
-            if (!sessionStorage.getItem('adminPassword')) return;
+            if (!hasAdminSession()) return;
             fetchAlerts();
             fetchInsights();
+            fetchUsage();
+            fetchAudit();
+            fetchBlocks();
         }, 60000);
     }
     insightsDays.addEventListener('change', fetchInsights);
@@ -897,7 +1198,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
 
             if (res.status === 401) {
-                sessionStorage.removeItem('adminPassword');
+                clearAdminSession();
                 checkAuth();
                 return;
             }
@@ -906,7 +1207,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             allUsers = data.users;
             usersLoaded = true;
-            renderUsers(allUsers);
+            fillFilterOptions(filterStatus, allUsers.map(u => u.status), 'All statuses');
+            fillFilterOptions(filterPlan, allUsers.map(u => u.plan), 'All plans');
+            applyUserFilters();
             populateUserFilterOptions();
             // Re-render the cached feed so plan / "no account" sub-lines pick up the fresh user list.
             // Skip when activity hasn't loaded yet, so this doesn't flash the empty state before fetchActivity() runs.
@@ -945,6 +1248,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<div class="reset-chip"><span class="badge ${cls}">reset link ${escapeHTML(link.status)}</span> ${escapeHTML(relativeTime(link.created_at))}</div>`;
     }
 
+    // "plan ends" / "trial ends" under the plan name: red once lapsed, amber inside 14 days. Informational only.
+    function expiryChips(user) {
+        return [['plan ends', user.plan_expires_at], ['trial ends', user.trial_ends_at]].map(([label, value]) => {
+            if (!value) return '';
+            const t = new Date(value).getTime();
+            const days = Math.ceil((t - Date.now()) / 86400000);
+            const cls = days < 0 ? 'badge-danger' : days <= 14 ? 'badge-warning' : 'badge-grey';
+            const text = days < 0 ? `${label}: lapsed ${-days}d ago` : `${label}: ${new Date(value).toLocaleDateString()} (${days}d)`;
+            return `<div><span class="badge ${cls}">${escapeHTML(text)}</span></div>`;
+        }).join('');
+    }
+
     function renderUsers(users) {
         usersTbody.innerHTML = '';
 
@@ -973,13 +1288,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${extVersionHtml}
                     ${resetChip(user.reset_link)}
                 </td>
-                <td><span class="plan-text">${escapeHTML(user.plan)}</span></td>
-                <td><span class="badge status-${user.status}">${escapeHTML(user.status)}</span></td>
+                <td><span class="plan-text">${escapeHTML(user.plan)}</span>${expiryChips(user)}</td>
+                <td><span class="badge status-${escapeHTML(user.status)}">${escapeHTML(user.status)}</span></td>
                 <td>${user.active_sessions || 0} / ${user.max_devices}${ghostFlag(user)}</td>
                 <td>${lastLoginLocale}</td>
                 <td>${renderLastIssue(user.last_issue, user.last_seen)}</td>
                 <td>${createdAtLocale}</td>
                 <td>
+                    <button class="action-btn projects" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Projects (delete)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    </button>
                     <button class="action-btn history" data-email="${escapeHTML(user.email)}" title="View history">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     </button>
@@ -998,6 +1316,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 </td>
             `;
             usersTbody.appendChild(tr);
+        });
+
+        document.querySelectorAll('.action-btn.projects').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const t = e.currentTarget;
+                openProjectsModal(t.getAttribute('data-id'), t.getAttribute('data-email'));
+            });
         });
 
         document.querySelectorAll('.action-btn.history').forEach(btn => {
@@ -1059,6 +1384,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('plan').value = user.plan;
         document.getElementById('status').value = user.status;
         document.getElementById('max-devices').value = user.max_devices;
+        document.getElementById('plan-expires').value = user.plan_expires_at ? String(user.plan_expires_at).slice(0, 10) : '';
+        document.getElementById('trial-ends').value = user.trial_ends_at ? String(user.trial_ends_at).slice(0, 10) : '';
 
         addUserModal.querySelector('h3').textContent = 'Edit User';
         addUserForm.querySelector('.submit-btn').textContent = 'Save Changes';
@@ -1082,9 +1409,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 opt.textContent = base;
                 select.appendChild(opt);
             });
+            // Besides the configured connections, the admin can type any base URL.
+            const customOpt = document.createElement('option');
+            customOpt.value = '__custom__';
+            customOpt.textContent = 'Type a URL…';
+            select.appendChild(customOpt);
+            const custom = document.getElementById('reset-base-custom');
+            custom.value = '';
+            const syncCustom = () => custom.classList.toggle('hidden', select.value !== '__custom__');
+            select.onchange = syncCustom;
+            if (data.bases.length === 0) select.value = '__custom__';
+            syncCustom();
             document.getElementById('reset-result').classList.add('hidden');
             const genBtn = document.getElementById('reset-generate-btn');
-            genBtn.onclick = () => issueResetLink(id, select.value);
+            genBtn.onclick = () => {
+                const base = select.value === '__custom__' ? custom.value.trim() : select.value;
+                if (!base) { showToast('Type the base URL first', 'error'); return; }
+                issueResetLink(id, base);
+            };
             openModal(document.getElementById('reset-modal'));
         } catch (err) {
             showToast(err.message, 'error');
@@ -1120,6 +1462,152 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('reset-result').classList.remove('hidden');
         } catch (err) {
             showToast(err.message, 'error');
+        }
+    }
+
+    // ---- Projects modal: choose a user's project and delete it ----
+    const projectsModal = document.getElementById('projects-modal');
+    const projectsList = document.getElementById('projects-list');
+    const projectsTitle = document.getElementById('projects-modal-title');
+    const projectsLoading = document.getElementById('projects-loading');
+    const projectsError = document.getElementById('projects-error');
+    let projectsUser = null;
+    let projectsData = [];
+    const projectsSearch = document.getElementById('projects-search');
+    const projectsFilter = document.getElementById('projects-filter');
+    const projectsSort = document.getElementById('projects-sort');
+    const projectsCount = document.getElementById('projects-count');
+
+    // Search + filter + sort over the projects already loaded for this user.
+    function applyProjectFilters() {
+        const term = projectsSearch.value.trim().toLowerCase();
+        const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+        const time = (v) => new Date(v).getTime();
+        const filters = {
+            all: () => true,
+            with_posts: p => p.post_count > 0,
+            empty: p => p.post_count === 0,
+            recent: p => time(p.created_at) >= cutoff,
+        };
+        const sorters = {
+            created_desc: (a, b) => time(b.created_at) - time(a.created_at),
+            created_asc: (a, b) => time(a.created_at) - time(b.created_at),
+            name_asc: (a, b) => a.name.localeCompare(b.name),
+            posts_desc: (a, b) => b.post_count - a.post_count,
+            posts_asc: (a, b) => a.post_count - b.post_count,
+        };
+        const rows = projectsData
+            .filter(p => p.name.toLowerCase().includes(term))
+            .filter(filters[projectsFilter.value] || filters.all)
+            .sort(sorters[projectsSort.value] || sorters.created_desc);
+        projectsCount.textContent = projectsData.length ? `Showing ${rows.length} of ${projectsData.length} projects` : '';
+        renderProjects(rows, projectsData.length ? 'No projects match your search or filter.' : 'This user has no projects.');
+    }
+    projectsSearch.addEventListener('input', applyProjectFilters);
+    [projectsFilter, projectsSort].forEach(el => el.addEventListener('change', applyProjectFilters));
+
+    async function openProjectsModal(userId, email) {
+        projectsUser = { id: userId, email };
+        projectsTitle.textContent = `Projects of ${email}`;
+        projectsSearch.value = '';
+        projectsFilter.value = 'all';
+        projectsSort.value = 'created_desc';
+        openModal(projectsModal);
+        await loadProjects();
+    }
+
+    async function loadProjects() {
+        projectsList.innerHTML = '';
+        projectsError.classList.add('hidden');
+        projectsLoading.classList.remove('hidden');
+        try {
+            const data = await adminGet(`/api/admin/users/${projectsUser.id}/projects`);
+            projectsData = data.projects;
+            applyProjectFilters();
+        } catch (err) {
+            projectsError.textContent = err.message;
+            projectsError.classList.remove('hidden');
+        } finally {
+            projectsLoading.classList.add('hidden');
+        }
+    }
+
+    function renderProjects(projects, emptyMsg = 'This user has no projects.') {
+        projectsList.innerHTML = '';
+        if (projects.length === 0) {
+            const empty = document.createElement('p');
+            empty.style.color = 'var(--text-secondary)';
+            empty.textContent = emptyMsg;
+            projectsList.appendChild(empty);
+            return;
+        }
+        projects.forEach(p => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08)';
+            const info = document.createElement('div');
+            info.style.cssText = 'flex:1;min-width:200px';
+            const name = document.createElement('strong');
+            name.textContent = p.name;
+            const meta = document.createElement('div');
+            meta.style.cssText = 'font-size:0.85em;color:var(--text-secondary)';
+            meta.textContent = `${p.post_count} posts · ${p.profile_count} profiles · created ${new Date(p.created_at).toLocaleDateString()}`;
+            info.append(name, meta);
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn danger-btn';
+            del.textContent = 'Delete…';
+            del.addEventListener('click', () => showProjectConfirm(row, del, p));
+            row.append(info, del);
+            projectsList.appendChild(row);
+        });
+    }
+
+    // Inline confirmation: the admin must type the exact project name.
+    function showProjectConfirm(row, delBtn, project) {
+        delBtn.classList.add('hidden');
+        const box = document.createElement('div');
+        box.style.cssText = 'flex-basis:100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center';
+        const label = document.createElement('span');
+        label.textContent = 'Type the project name to confirm:';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = project.name;
+        input.autocomplete = 'off';
+        const ok = document.createElement('button');
+        ok.type = 'button';
+        ok.className = 'btn danger-btn';
+        ok.textContent = 'Delete project';
+        ok.disabled = true;
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'btn secondary-btn';
+        cancel.textContent = 'Cancel';
+        input.addEventListener('input', () => { ok.disabled = input.value !== project.name; });
+        cancel.addEventListener('click', () => { box.remove(); delBtn.classList.remove('hidden'); });
+        ok.addEventListener('click', () => deleteProject(project, input.value, ok));
+        box.append(label, input, ok, cancel);
+        row.appendChild(box);
+        input.focus();
+    }
+
+    async function deleteProject(project, confirmName, okBtn) {
+        try {
+            okBtn.disabled = true;
+            okBtn.textContent = 'Deleting...';
+            const res = await fetch(`/api/admin/users/${projectsUser.id}/projects/${project.id}`, {
+                method: 'DELETE',
+                headers: getHeaders(),
+                body: JSON.stringify({ confirm_name: confirmName })
+            });
+            if (res.status === 401) { clearAdminSession(); checkAuth(); throw new Error('Session expired'); }
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to delete project');
+            showToast(`Deleted "${data.project.name}": ${data.links_removed} post links removed, ${data.posts_deleted} posts deleted, ${data.posts_kept} kept (still used elsewhere)`, 'success');
+            await loadProjects();
+        } catch (err) {
+            showToast(err.message, 'error');
+            okBtn.disabled = false;
+            okBtn.textContent = 'Delete project';
         }
     }
 

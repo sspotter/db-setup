@@ -8,6 +8,7 @@ const pool = require('../db');
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_please_change';
 const JWT_EXPIRES_IN = '7d';
 const { logServerError } = require('../middleware/activityLog');
+const { ipBlockGuard } = require('../middleware/ipBlock');
 
 // POST /api/auth/register
 router.post('/register', async (req, res) => {
@@ -57,7 +58,7 @@ router.post('/register', async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', ipBlockGuard, async (req, res) => {
     const client = await pool.connect();
     try {
         const { email, password } = req.body;

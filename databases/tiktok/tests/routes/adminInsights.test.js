@@ -85,6 +85,13 @@ describe('GET /api/admin/alerts', () => {
 
         expect(res.body.alerts.map((a) => a.type)).toEqual(['failed_logins_ip', 'server_errors']);
         expect(res.body.alerts[0].message).toContain('9.9.9.9');
+        expect(res.body.alerts[0]).toMatchObject({ ip: '9.9.9.9', count: 12, accounts: 3 });
+    });
+
+    it('does not keep alerting about logins an IP block already refused', async () => {
+        pool.query.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ n: 0 }] });
+        await asAdmin('/api/admin/alerts');
+        expect(pool.query.mock.calls[0][0]).toContain("reason IS DISTINCT FROM 'ip_blocked'");
     });
 
     it('returns no alerts below the thresholds', async () => {

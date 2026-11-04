@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { checkPostAccess } = require('../utils/ownership');
 
 /**
  * POST /api/comments
@@ -22,6 +23,11 @@ router.post('/comments', async (req, res) => {
 
         if (!post_shortcode || !Array.isArray(comments) || comments.length === 0) {
             return res.status(400).json({ success: false, error: 'post_shortcode and comments array required' });
+        }
+
+        // Comments hang off a SHARED post row: only a user who has the post may add to it.
+        if (!(await checkPostAccess(post_shortcode, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
         }
 
         await client.query('BEGIN');
@@ -239,6 +245,10 @@ router.post('/comments/log', async (req, res) => {
 
         if (!post_shortcode) {
             return res.status(400).json({ success: false, error: 'post_shortcode required' });
+        }
+
+        if (!(await checkPostAccess(post_shortcode, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Not found' });
         }
 
         const result = await pool.query(

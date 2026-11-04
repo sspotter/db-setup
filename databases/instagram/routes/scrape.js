@@ -5,6 +5,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { checkScrapeSessionOwnership } = require('../utils/ownership');
 
 /**
  * POST /api/scrape/sessions
@@ -182,6 +183,11 @@ router.get('/scrape/sessions/:id/next-job', async (req, res) => {
     try {
         const { id } = req.params;
 
+        // Only the session's owner may pull its jobs.
+        if (!(await checkScrapeSessionOwnership(id, req.user.id))) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+        }
+
         const result = await pool.query(
             `SELECT * FROM scrape_jobs
              WHERE session_id = $1 AND status = 'pending'
@@ -221,10 +227,12 @@ router.patch('/scrape/jobs/:id', async (req, res) => {
 
         await client.query('BEGIN');
 
-        // Get current job
+        // Get current job (only if its session belongs to the caller; otherwise it is "not found")
         const jobResult = await client.query(
-            'SELECT * FROM scrape_jobs WHERE id = $1',
-            [id]
+            `SELECT sj.* FROM scrape_jobs sj
+               JOIN scrape_sessions ss ON ss.id = sj.session_id
+              WHERE sj.id = $1 AND ss.user_id = $2`,
+            [id, req.user.id]
         );
 
         if (jobResult.rows.length === 0) {

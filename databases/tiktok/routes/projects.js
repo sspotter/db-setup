@@ -478,16 +478,17 @@ router.get('/projects/:id/posts', async (req, res) => {
             return res.status(404).json({ success: false, error: 'Project not found' });
         }
 
+        // Hidden / soft-deleted state is this project's own (project_posts), not the shared post's.
         let query = `
-            SELECT p.*,
+            SELECT p.*, ppo.is_hidden, ppo.hidden_at, ppo.deleted_at,
                    (SELECT json_agg(json_build_object('likes', h.likes_count, 'comments', h.comments_count, 'views', h.video_view_count, 'reposts', h.repost_count, 'shares', h.share_count, 'bookmarks', h.bookmark_count, 'at', h.captured_at))
                     FROM (SELECT * FROM post_metrics_history WHERE post_shortcode = p.shortcode ORDER BY captured_at DESC LIMIT 1) h
                    ) AS latest_metrics
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
             WHERE ppo.project_id = $1
-              AND (p.is_hidden = false OR p.is_hidden IS NULL)
-              AND p.deleted_at IS NULL
+              AND ppo.is_hidden = false
+              AND ppo.deleted_at IS NULL
         `;
         const params = [id];
         let paramIdx = 2;
@@ -498,7 +499,7 @@ router.get('/projects/:id/posts', async (req, res) => {
         }
 
         // Count query
-        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1 AND (p.is_hidden = false OR p.is_hidden IS NULL) AND p.deleted_at IS NULL`;
+        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`;
         const countParams = [id];
         let cIdx = 2;
         if (owner) {

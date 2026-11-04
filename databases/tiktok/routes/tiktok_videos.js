@@ -276,7 +276,9 @@ router.patch('/tiktok/videos/:video_id/qualify', async (req, res) => {
         }
 
         if (is_hidden !== undefined) {
-            await syncHiddenAcrossTables(pool, video_id, req.user.id, is_hidden);
+            // Mirror onto the project_posts rows of exactly the projects whose video rows just changed.
+            const touchedProjects = [...new Set(result.rows.map(r => r.project_id).filter(Boolean))];
+            await syncHiddenAcrossTables(pool, video_id, req.user.id, is_hidden, touchedProjects);
         }
 
         // Refresh keyword stats for every keyword whose video set changed.
@@ -460,7 +462,8 @@ router.delete('/tiktok/videos/:video_id', async (req, res) => {
         const { keyword_id } = req.query;
         if (!keyword_id) return res.status(400).json({ success: false, error: 'keyword_id is required' });
 
-        if (!(await checkKeywordOwnership(keyword_id, req.user.id))) {
+        const ownedKeyword = await getOwnedKeyword(keyword_id, req.user.id);
+        if (!ownedKeyword) {
             return res.status(403).json({ success: false, error: 'Access denied' });
         }
 
@@ -469,7 +472,11 @@ router.delete('/tiktok/videos/:video_id', async (req, res) => {
             [video_id, keyword_id]
         );
 
-        await syncHiddenAcrossTables(pool, video_id, req.user.id, true);
+        // Hide the video only in the project this keyword belongs to, not in the user's other projects.
+        await syncHiddenAcrossTables(
+            pool, video_id, req.user.id, true,
+            ownedKeyword.project_id ? [ownedKeyword.project_id] : null
+        );
 
         // Update Keyword stats after deletion
         await pool.query(

@@ -115,7 +115,11 @@ router.get('/health', verifyAdmin, async (req, res) => {
             `SELECT to_regclass('public.api_events') IS NOT NULL AS api_events,
                     to_regclass('public.password_resets') IS NOT NULL AS password_resets,
                     EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'api_events' AND column_name = 'duration_ms') AS duration_ms,
-                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'last_seen') AS last_seen`
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'last_seen') AS last_seen,
+                    to_regclass('public.admin_audit') IS NOT NULL AS admin_audit,
+                    EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'plan_expires_at') AS plan_expiry,
+                    to_regclass('public.admin_accounts') IS NOT NULL AS admin_accounts,
+                    to_regclass('public.blocked_ips') IS NOT NULL AS blocked_ips`
         );
         body.migrations = m.rows[0];
         if (body.migrations.api_events) {
@@ -138,7 +142,8 @@ router.get('/alerts', verifyAdmin, async (req, res) => {
             pool.query(
                 `SELECT ip, count(*)::int AS n, count(DISTINCT lower(email))::int AS accounts
                  FROM api_events
-                 WHERE path = '/api/auth/login' AND status >= 400 AND ip IS NOT NULL
+                 WHERE ((path = '/api/auth/login' AND status >= 400) OR reason = 'bad_admin_password') AND ip IS NOT NULL
+                   AND reason IS DISTINCT FROM 'ip_blocked'
                    AND created_at >= now() - interval '15 minutes'
                  GROUP BY ip HAVING count(*) >= $1 ORDER BY n DESC`,
                 [perIp]
@@ -151,6 +156,8 @@ router.get('/alerts', verifyAdmin, async (req, res) => {
             severity: 'danger',
             message: `${r.n} failed logins from ${r.ip} in 15 min (${r.accounts} account${r.accounts === 1 ? '' : 's'})`,
             ip: r.ip,
+            count: r.n,
+            accounts: r.accounts,
         }));
         if (errs.rows[0].n >= perWindow5xx) {
             alerts.push({ type: 'server_errors', severity: 'danger', message: `${errs.rows[0].n} server errors (5xx) in the last 15 min` });

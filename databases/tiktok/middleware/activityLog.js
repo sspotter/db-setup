@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
+const { clientIp } = require('../utils/adminAudit');
 
 const LOGIN_PATH = '/api/auth/login';
 const RETENTION_SQL = "DELETE FROM api_events WHERE created_at < now() - interval '90 days'";
@@ -81,8 +82,7 @@ function activityLog(req, res, next) {
         const token = req.user ? null : decodeBearer(req);
         const userId = (req.user && req.user.id) || act.userId || (token && token.id) || null;
         const email = (req.user && req.user.email) || act.email || (token && token.email) || null;
-        const xff = req.headers['x-forwarded-for'];
-        const ip = xff ? String(xff).split(',')[0].trim() : req.ip;
+        const ip = clientIp(req);
         // A route may set res.locals.activity.error to log more detail than the client sees.
         const error = res.statusCode >= 400 ? (act.error || errorText) : null;
 

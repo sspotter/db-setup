@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
+const { userHasPost } = require('../utils/ownership');
 const { platformGuard } = require('../middleware/platformGuard');
 const { toObservedAt, newer, bothUnknown, IG_USERS_FOLLOWERS_SET, LATEST_METRICS_ORDER } = require('../observed');
 
@@ -410,6 +411,11 @@ router.get('/posts', async (req, res) => {
 router.get('/posts/:shortcode/history', async (req, res) => {
     try {
         const { shortcode } = req.params;
+
+        // Posts are shared rows: only a user who has the post may read its history.
+        if (!(await userHasPost(req.user.id, shortcode))) {
+            return res.status(404).json({ success: false, error: 'Post not found' });
+        }
 
         const result = await pool.query(
             // Chronological by when Instagram showed the numbers, not when they were synced.
