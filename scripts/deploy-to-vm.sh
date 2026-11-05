@@ -56,7 +56,9 @@ fi
 
 # ---- local checks
 [ "$(git branch --show-current)" = main ] || { echo "STOP: not on main"; exit 1; }
-git diff --quiet && git diff --cached --quiet || { echo "STOP: tracked files have uncommitted changes. Commit first, so the VM gets exactly what is in git."; exit 1; }
+git update-index -q --refresh || true
+# Line-ending-only differences (Windows checkout read by another git/bash) do not matter: the patch is built from commits.
+git diff --quiet --ignore-cr-at-eol HEAD || { echo "STOP: tracked files have uncommitted changes (not just line endings). Commit first, so the VM gets exactly what is in git."; git diff --stat --ignore-cr-at-eol HEAD | tail -5; echo "(Running from PowerShell? Use Git Bash: 'bash' there can be WSL, whose git sees every CRLF file as changed.)"; exit 1; }
 HEAD_SHA="$(git rev-parse HEAD)"
 
 echo "== asking the VM what it runs"
