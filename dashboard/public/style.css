@@ -385,6 +385,50 @@ details.on-demand > summary h2 { display: inline; font-size: 1.1rem; }
 .block-summary { margin-bottom: 0.5rem; font-weight: 600; overflow-wrap: anywhere; }
 .block-actions { justify-content: flex-end; margin-top: 1rem; }
 
+/* User overview */
+.uo-seg { display: inline-flex; border: 1px solid var(--glass-border); border-radius: 8px; overflow: hidden; }
+.uo-seg-btn, .uo-tab { background: rgba(255, 255, 255, 0.05); border: 0; color: var(--text-primary); padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 500; cursor: pointer; }
+.uo-seg-btn:hover, .uo-tab:hover { background: rgba(255, 255, 255, 0.1); }
+.uo-seg-btn.active, .uo-tab.active { background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); color: white; }
+.uo-head { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 0.6rem 1rem; margin: 1rem 0; font-size: 0.85rem; }
+.uo-fact { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; overflow-wrap: anywhere; }
+.uo-fact-label { color: var(--text-secondary); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.uo-warnings { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 1rem; }
+.uo-warning { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; padding: 0.5rem 0.8rem; border-radius: 10px; font-size: 0.85rem; border: 1px solid var(--glass-border); overflow-wrap: anywhere; }
+.uo-warning.bad { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.3); color: #fca5a5; }
+.uo-warning.warn { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.3); color: #fbbf24; }
+.uo-warning.info { background: rgba(59, 130, 246, 0.12); border-color: rgba(59, 130, 246, 0.3); color: #93c5fd; }
+.uo-warning code { font-size: 0.72rem; opacity: 0.8; }
+.uo-pill { padding: 0.1rem 0.55rem; border-radius: 999px; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; background: rgba(255, 255, 255, 0.1); }
+.uo-grid { display: grid; grid-template-columns: minmax(12rem, 18rem) 1fr; gap: 1rem; margin-bottom: 1rem; }
+.uo-grid > * { min-width: 0; }
+.uo-tiles { display: flex; flex-direction: column; gap: 0.5rem; }
+.uo-tile { display: flex; flex-direction: column; gap: 0.2rem; text-align: left; padding: 0.7rem 0.9rem; border-radius: 12px; cursor: pointer; color: var(--text-primary); background: rgba(15, 23, 42, 0.5); border: 1px solid var(--glass-border); }
+.uo-tile:hover { background: rgba(255, 255, 255, 0.08); }
+.uo-tile.active { border-color: var(--accent-purple); background: rgba(139, 92, 246, 0.15); }
+.uo-tile.browser { border-style: dashed; }
+.uo-tile-label { font-size: 0.75rem; color: var(--text-secondary); }
+.uo-tile-value { font-size: 1.3rem; font-weight: 700; overflow-wrap: anywhere; }
+.uo-detail { padding: 1rem; border-radius: 12px; border: 1px solid var(--glass-border); background: rgba(15, 23, 42, 0.3); }
+.uo-detail h3 { font-size: 1rem; }
+.uo-detail h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin: 1rem 0 0.4rem; }
+.uo-big { font-size: 1.8rem; font-weight: 700; margin-top: 0.25rem; overflow-wrap: anywhere; }
+.uo-explain { font-size: 0.88rem; line-height: 1.5; overflow-wrap: anywhere; }
+.uo-formula { display: block; padding: 0.6rem 0.8rem; border-radius: 8px; background: rgba(15, 23, 42, 0.7); font-family: ui-monospace, Consolas, monospace; font-size: 0.82rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+.uo-list { padding-left: 1.2rem; font-size: 0.85rem; line-height: 1.5; overflow-wrap: anywhere; }
+.uo-tabs { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; }
+.uo-tab { border-radius: 8px; border: 1px solid var(--glass-border); }
+th.num, td.num { text-align: right; }
+.uo-total td { font-weight: 700; border-top: 1px solid var(--glass-border); background: var(--table-header-bg); }
+#uo-project { text-overflow: ellipsis; }
+.uo-open { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 640px) {
+    .uo-grid { grid-template-columns: 1fr; }
+    .uo-tiles { display: grid; grid-template-columns: 1fr 1fr; }
+    #uo-panel .events-header, #uo-panel .filter-row { width: 100%; }
+    #uo-project { flex: 1 1 100%; width: 100%; }
+}
+
 /* Phone width: stack, no page scroll, tables scroll inside card */
 @media (max-width: 640px) {
     .container { padding: 1rem; }

@@ -426,6 +426,39 @@
         </div>
     </div>
 
+    <!-- User Overview Modal: read-only debug view of what a user sees in a project -->
+    <div id="overview-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel large-modal">
+            <div class="modal-header">
+                <h3 id="overview-modal-title">User overview</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="ov-top">
+                    <div id="overview-user" class="ov-user"></div>
+                    <label class="ov-project">Project
+                        <select id="overview-project" aria-label="Project"></select>
+                    </label>
+                </div>
+                <div id="overview-warnings"></div>
+                <div class="ov-grid">
+                    <div id="overview-metrics" class="ov-metrics"></div>
+                    <div id="overview-breakdown" class="ov-breakdown"><p class="ov-muted">Click a number to see how it was built.</p></div>
+                </div>
+                <div class="ov-tabs" id="overview-tabs">
+                    <button type="button" class="ov-tab active" data-tab="posts">Posts</button>
+                    <button type="button" class="ov-tab" data-tab="creators">Creators</button>
+                    <button type="button" class="ov-tab" data-tab="save_history">Save history</button>
+                    <button type="button" class="ov-tab" data-tab="sessions">Sessions / devices</button>
+                </div>
+                <div id="overview-tab-body" class="table-container"></div>
+                <details class="ov-browser"><summary>Computed in the browser (not visible to the server)</summary><ul id="overview-browser-only"></ul></details>
+                <div id="overview-loading" class="loading-spinner hidden"></div>
+                <div id="overview-error" class="error-message hidden"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div id="toast" class="toast hidden"></div>
 

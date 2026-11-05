@@ -23,6 +23,38 @@ app.use('/api', postsRouter);
 const PROJ = '22222222-2222-4222-8222-222222222222';
 const sqlOf = (client) => client.query.mock.calls.map((c) => String(c[0]));
 
+describe('POST /posts with posts from another platform', () => {
+    const base = { owner: { username: 'mixed_owner', follower_count: 10 }, likes: 1, comments: 0, timestamp: 1790788541 };
+    let client;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        client = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'x', is_new: true }], rowCount: 1 }), release: jest.fn() };
+        pool.connect.mockResolvedValue(client);
+    });
+
+    it('saves the TikTok post, skips the Instagram one and reports the count', async () => {
+        const res = await request(app).post('/api/posts').send({ posts: [
+            { ...base, shortcode: '7657591518504439047', postUrl: 'https://www.tiktok.com/@mixed_owner/video/7657591518504439047' },
+            { ...base, shortcode: 'FOREIGNIG', postUrl: 'https://www.instagram.com/p/FOREIGNIG/' },
+        ] });
+        expect(res.status).toBe(200);
+        expect(res.body.skipped_other_platform).toBe(1);
+        const params = JSON.stringify(client.query.mock.calls.map((c) => c[1]));
+        expect(params).toContain('7657591518504439047');
+        expect(params).not.toContain('FOREIGNIG');
+    });
+
+    it('refuses a batch with no TikTok posts before touching the database', async () => {
+        const res = await request(app).post('/api/posts').send({ posts: [
+            { ...base, shortcode: 'FOREIGNIG', postUrl: 'https://www.instagram.com/p/FOREIGNIG/' },
+        ] });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('WRONG_PLATFORM');
+        expect(pool.connect).not.toHaveBeenCalled();
+    });
+});
+
 describe('posts — per-project hide + soft delete', () => {
     let mockClient;
 

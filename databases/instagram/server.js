@@ -21,6 +21,7 @@ const adminUsageRoutes = require('./routes/adminUsage');
 const adminPlansRoutes = require('./routes/adminPlans');
 const adminAccountsRoutes = require('./routes/adminAccounts');
 const adminBlocksRoutes = require('./routes/adminBlocks');
+const adminUserOverviewRoutes = require('./routes/adminUserOverview');
 const projectsRoutes = require('./routes/projects');
 const authenticateToken = require('./middleware/auth');
 const { activityLog, startRetention } = require('./middleware/activityLog');
@@ -46,6 +47,7 @@ app.use('/api/admin', adminUsageRoutes);
 app.use('/api/admin', adminPlansRoutes);
 app.use('/api/admin', adminAccountsRoutes);
 app.use('/api/admin', adminBlocksRoutes);
+app.use('/api/admin', adminUserOverviewRoutes);
 
 // Protected routes (requires JWT)
 app.use('/api', authenticateToken, usersRoutes);

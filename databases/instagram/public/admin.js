@@ -1298,6 +1298,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button class="action-btn projects" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Projects (delete)">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                     </button>
+                    <button class="action-btn overview" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Overview (what this user sees, with formulas)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    </button>
                     <button class="action-btn history" data-email="${escapeHTML(user.email)}" title="View history">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
                     </button>
@@ -1322,6 +1325,13 @@ document.addEventListener('DOMContentLoaded', () => {
             btn.addEventListener('click', (e) => {
                 const t = e.currentTarget;
                 openProjectsModal(t.getAttribute('data-id'), t.getAttribute('data-email'));
+            });
+        });
+
+        document.querySelectorAll('.action-btn.overview').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const t = e.currentTarget;
+                openOverviewModal(t.getAttribute('data-id'), t.getAttribute('data-email'));
             });
         });
 
@@ -1622,6 +1632,122 @@ document.addEventListener('DOMContentLoaded', () => {
         logoutUserEmail.textContent = email;
         openModal(logoutModal);
     }
+
+    // ---- User overview modal: read-only view of what a user sees in a project, with formulas ----
+    const ovModal = document.getElementById('overview-modal');
+    const ovEls = {
+        title: document.getElementById('overview-modal-title'), top: document.getElementById('overview-top'),
+        warnings: document.getElementById('overview-warnings'), metrics: document.getElementById('overview-metrics'),
+        detail: document.getElementById('overview-detail'), tabs: document.getElementById('overview-tabs'),
+        tabBody: document.getElementById('overview-tab-body'), browserOnly: document.getElementById('overview-browser-only'),
+        loading: document.getElementById('overview-loading'), error: document.getElementById('overview-error'),
+    };
+    let ovUser = null;
+    let ovData = null;
+    let ovTab = 'posts';
+    let ovRequest = 0;
+
+    const ovFmt = (v) => {
+        if (v === null || v === undefined || v === '') return '-';
+        if (typeof v === 'number') return v.toLocaleString();
+        if (typeof v === 'boolean') return v ? 'yes' : 'no';
+        if (/^\d{4}-\d{2}-\d{2}T/.test(String(v))) { const d = new Date(v); if (!isNaN(d)) return d.toLocaleString(); }
+        return String(v);
+    };
+
+    // Every cell goes through esc(), so nothing from the data is interpreted as HTML.
+    function ovTable(columns, rows, total) {
+        if (!rows.length && !total) return '<p class="ov-muted">No rows.</p>';
+        const cls = (c) => (c.numeric ? ' class="ov-num"' : '');
+        const head = columns.map(c => `<th${cls(c)}>${esc(c.label)}</th>`).join('');
+        const line = (r, strong) => `<tr>${columns.map(c => `<td${cls(c)}>${strong ? '<strong>' : ''}${esc(ovFmt(r[c.key]))}${strong ? '</strong>' : ''}</td>`).join('')}</tr>`;
+        return `<table><thead><tr>${head}</tr></thead><tbody>${rows.map(r => line(r, false)).join('')}${total ? line(total, true) : ''}</tbody></table>`;
+    }
+
+    async function openOverviewModal(userId, email) {
+        ovUser = { id: userId, email };
+        ovData = null;
+        ovEls.title.textContent = `Overview of ${email}`;
+        ovTab = 'posts';
+        openModal(ovModal);
+        await loadOverview(null);
+    }
+
+    async function loadOverview(projectId) {
+        const mine = ++ovRequest;
+        ovEls.error.classList.add('hidden');
+        ovEls.loading.classList.remove('hidden');
+        try {
+            const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+            const data = await adminGet(`/api/admin/users/${encodeURIComponent(ovUser.id)}/overview${q}`);
+            if (mine !== ovRequest) return;
+            ovData = data;
+            renderOverview();
+        } catch (err) {
+            if (mine !== ovRequest) return;
+            ovEls.error.textContent = err.message;
+            ovEls.error.classList.remove('hidden');
+        } finally {
+            if (mine === ovRequest) ovEls.loading.classList.add('hidden');
+        }
+    }
+
+    function renderOverview() {
+        const d = ovData;
+        const u = d.user;
+        const opts = d.projects.map(p => `<option value="${esc(p.id)}"${p.id === d.selected_project_id ? ' selected' : ''}>${esc(p.name)} (${esc(p.posts)} posts)</option>`).join('');
+        ovEls.top.innerHTML =
+            `<span>Project:</span><select id="overview-project" aria-label="Project">${opts || '<option>No projects</option>'}</select>` +
+            `<span class="badge status-${esc(u.status)}">${esc(u.status)}</span>` +
+            `<span>Platform: ${esc(d.platform)}</span><span>Plan: ${esc(u.plan)}${u.plan_expires_at ? ' (expires ' + esc(ovFmt(u.plan_expires_at)) + ')' : ''}${u.trial_ends_at ? ', trial ends ' + esc(ovFmt(u.trial_ends_at)) : ''}</span>` +
+            `<span>Devices: ${esc(u.active_sessions)} / ${esc(u.max_devices)}</span><span>Last login: ${esc(ovFmt(u.last_login))}</span>`;
+        const sel = document.getElementById('overview-project');
+        if (sel && d.projects.length) sel.addEventListener('change', () => loadOverview(sel.value));
+
+        ovEls.warnings.innerHTML = d.warnings.map(w => `<div class="ov-warn ${esc(w.severity)}"><strong>${esc(String(w.severity).toUpperCase())}</strong> ${esc(w.message)}</div>`).join('');
+        ovEls.metrics.innerHTML = d.metrics.length
+            ? d.metrics.map((m, i) => `<button type="button" class="ov-metric" data-i="${i}"><span>${esc(m.label)}</span><b>${esc(ovFmt(m.value))}</b></button>`).join('')
+            : '<p class="ov-muted">This user has no project yet.</p>';
+        ovEls.metrics.querySelectorAll('.ov-metric').forEach(b => b.addEventListener('click', () => {
+            ovEls.metrics.querySelectorAll('.ov-metric').forEach(x => x.classList.remove('active'));
+            b.classList.add('active');
+            renderOverviewDetail(d.metrics[Number(b.getAttribute('data-i'))]);
+        }));
+        ovEls.detail.innerHTML = '<p class="ov-muted">Click a number to see how it was built.</p>';
+        ovEls.browserOnly.innerHTML = '<strong>Computed in the browser (the server cannot see):</strong><ul>' + d.browser_only.map(s => `<li>${esc(s)}</li>`).join('') + '</ul>';
+        renderOverviewTab();
+    }
+
+    function renderOverviewDetail(m) {
+        const b = m.breakdown ? ovData.breakdowns[m.breakdown] : null;
+        let h = `<h4>${esc(m.label)} = ${esc(ovFmt(m.value))}</h4><div class="ov-formula">${esc(m.formula)}</div>` +
+            `<div class="ov-muted">Inputs: ${m.inputs.map(esc).join(', ') || '-'}</div>`;
+        if (b) h += `<h4>${esc(b.title)}</h4><p class="ov-muted">${esc(b.explain)}</p>${ovTable(b.columns, b.rows, b.total)}`;
+        ovEls.detail.innerHTML = h;
+    }
+
+    function renderOverviewTab() {
+        const d = ovData;
+        ovEls.tabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === ovTab));
+        const c = (key, label, numeric = false) => ({ key, label, numeric });
+        let html = '';
+        if (ovTab === 'posts') {
+            html = ovTable([c('shortcode', 'Post'), c('owner', 'Owner'), c('likes', 'Likes', true), c('comments', 'Comments', true), c('posted_at', 'Posted'), c('is_paid', 'Paid'), c('type', 'Type'), c('collective_reach', 'Collective reach', true), c('has_metrics', 'Has metrics')], d.posts, null);
+        } else if (ovTab === 'creators') {
+            html = ovTable([c('username', 'Creator'), c('role', 'Role'), c('follower_count', 'Followers', true), c('posts', 'Posts', true), c('adds', 'Adds', true), c('scraped_at', 'scraped_at'), c('observed_at', 'observed_at')], d.creators, null);
+        } else if (ovTab === 'history') {
+            html = ovTable([c('at', 'When'), c('source', 'Source'), c('action', 'Action'), c('detail', 'Detail')], d.save_history, null);
+        } else {
+            html = `<p class="ov-muted">No per-device table exists; these are successful logins from the activity log (last 7 days). Counter: ${esc(d.user.active_sessions)} active of ${esc(d.user.max_devices)} allowed.</p>` +
+                ovTable([c('at', 'When'), c('kind', 'Kind'), c('ip', 'IP'), c('user_agent', 'User agent'), c('ext_version', 'Extension')], d.sessions, null);
+        }
+        ovEls.tabBody.innerHTML = html;
+    }
+
+    ovEls.tabs.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+        ovTab = b.getAttribute('data-tab');
+        if (ovData) renderOverviewTab();
+    }));
 
     function openModal(modal) {
         modal.classList.remove('hidden');

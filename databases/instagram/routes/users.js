@@ -7,6 +7,22 @@ const pool = require('../db');
 const { logServerError } = require('../middleware/activityLog');
 const { toObservedAt, IG_USERS_FOLLOWERS_SET } = require('../observed');
 
+// The TikTok extension's profile rows carry these; Instagram captures never do. Without this
+// check a mis-set API URL would write TikTok counts over Instagram profiles.
+const isTikTokProfile = (user) => 'heart_count' in user || 'video_count' in user || 'signature' in user;
+
+// The extension sends no observation time, so a count with none could only ever go up
+// (see IG_USERS_FOLLOWERS_SET), and a stale high count would stay forever. A fresh capture is
+// treated as seen now. The dashboard copies the backend's rows into the same browser list, and
+// those rows carry scraped_at or added_to_project: they repeat what is stored, so they get no
+// time and can't beat a real capture.
+const observedAtFor = (user) => {
+    const sent = toObservedAt(user.observedAt);
+    if (sent) return sent;
+    const echoedFromBackend = 'scraped_at' in user || 'added_to_project' in user;
+    return echoedFromBackend ? null : new Date().toISOString();
+};
+
 /**
  * POST /api/users
  * Body: { users: [{ id, username, follower_count, is_verified }], project_id? }
@@ -30,9 +46,14 @@ router.post('/users', async (req, res) => {
         }
 
         let upserted = 0;
+        let skipped = 0;
 
         for (const user of users) {
             if (!user.username) continue;
+            if (isTikTokProfile(user)) {
+                skipped++;
+                continue;
+            }
 
             const id = user.id || user.username;
 
@@ -62,7 +83,7 @@ router.post('/users', async (req, res) => {
                     user.external_url || null,
                     user.is_verified || false,
                     user.role || 'reference',
-                    toObservedAt(user.observedAt), // profile-page counts: newest observation wins
+                    observedAtFor(user), // profile-page counts: newest observation wins
                 ]
             );
 
@@ -79,7 +100,7 @@ router.post('/users', async (req, res) => {
             upserted++;
         }
 
-        res.json({ success: true, upserted });
+        res.json({ success: true, upserted, skipped });
     } catch (err) {
         console.error('[USERS] Error:', err.message);
         logServerError(res, err);

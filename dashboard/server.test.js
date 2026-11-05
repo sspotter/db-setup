@@ -754,3 +754,51 @@ describe('POST /api/check', () => {
         expect(res.body.checks[0]).toMatchObject({ ok: false, status: 500, detail: 'database disconnected' });
     });
 });
+
+describe('GET /api/users/:platform/:id/overview', () => {
+    const PID = '3f2b8c1e-5a4d-4e6f-9a1b-0c2d3e4f5a6b';
+    const overview = { success: true, user: { id: 7, email: 'u@x.test' }, projects: [{ id: PID, name: 'P', posts: 1, profiles: 1 }], selected_project_id: PID, metrics: [], breakdowns: {}, creators: [], posts: [], save_history: [], sessions: [{ device: 'd1', refresh_token: 'secret-token' }], warnings: [], browser_only: ['x'], internal_secret: 'nope' };
+
+    test('requires the dashboard password', async () => {
+        const res = await request(createApp(config)).get('/api/users/instagram/7/overview');
+        expect(res.status).toBe(401);
+    });
+
+    test('proxies to the right backend with its admin password and passes project_id', async () => {
+        routes[INSTA]['/api/admin/users/7/overview'] = { body: overview };
+        const res = await authed(request(createApp(config)).get(`/api/users/instagram/7/overview?project_id=${PID}`));
+        expect(res.status).toBe(200);
+        expect(res.body.platform).toBe('instagram');
+        expect(res.body.metrics).toEqual([]);
+        expect(res.body.browser_only).toEqual(['x']);
+        expect(res.body.internal_secret).toBeUndefined();
+        expect(JSON.stringify(res.body)).not.toContain('secret-token');
+        const call = global.fetch.mock.calls.find((c) => String(c[0]).includes('/overview'));
+        expect(call[0]).toBe(`${INSTA}/api/admin/users/7/overview?project_id=${PID}`);
+        expect(call[1].headers['x-admin-password']).toBe('insta-admin');
+        expect(fetchedUrls().some((u) => u.startsWith(TIK))).toBe(false);
+    });
+
+    test('rejects a bad platform, id or project_id without calling a backend', async () => {
+        const app = createApp(config);
+        expect((await authed(request(app).get('/api/users/mastodon/7/overview'))).status).toBe(400);
+        expect((await authed(request(app).get('/api/users/tiktok/..%2Fhealth/overview'))).status).toBe(400);
+        expect((await authed(request(app).get('/api/users/tiktok/7%3Fx=1/overview'))).status).toBe(400);
+        expect((await authed(request(app).get('/api/users/tiktok/7/overview?project_id=../x'))).status).toBe(400);
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    test('a backend without the endpoint gives a clear message', async () => {
+        routes[TIK]['/api/admin/users/7/overview'] = { status: 404, body: null };
+        const res = await authed(request(createApp(config)).get('/api/users/tiktok/7/overview'));
+        expect(res.status).toBe(404);
+        expect(res.body.error).toMatch(/not available on this backend yet/);
+    });
+
+    test('an unreachable backend is a 502 with the reason', async () => {
+        routes[TIK]['/api/admin/users/7/overview'] = refused();
+        const res = await authed(request(createApp(config)).get('/api/users/tiktok/7/overview'));
+        expect(res.status).toBe(502);
+        expect(res.body.error).toMatch(/ECONNREFUSED/);
+    });
+});

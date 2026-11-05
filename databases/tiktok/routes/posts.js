@@ -320,6 +320,7 @@ router.post('/posts', platformGuard, async (req, res) => {
             inserted,
             updated,
             total: inserted + updated,
+            ...(res.locals.skippedOtherPlatform && { skipped_other_platform: res.locals.skippedOtherPlatform }),
         });
     } catch (err) {
         await client.query('ROLLBACK');

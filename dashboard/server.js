@@ -250,6 +250,14 @@ function safeDetail(value) {
     return Object.fromEntries(Object.entries(value).filter(([k]) => !SECRET_KEY.test(k)).map(([k, v]) => [k, safeDetail(v)]));
 }
 
+// Whitelist for the user overview; sessions are passed through safeDetail separately.
+const OVERVIEW_FIELDS = [
+    'success', 'user', 'projects', 'selected_project_id', 'metrics', 'breakdowns', 'creators', 'posts',
+    'save_history', 'warnings', 'browser_only',
+];
+const OVERVIEW_ID = /^[A-Za-z0-9_-]{1,64}$/; // integer or UUID ids
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Null when out of range or not a plain whole number.
 function parseWhole(value, fallback, max) {
     if (value === undefined || value === '') return fallback;
@@ -379,6 +387,27 @@ function createApp(config) {
         try {
             const body = await adminGet(backends[platform], '/api/admin/users');
             res.json({ platform, users: (body.users || []).map(publicUser) });
+        } catch (err) {
+            res.status(502).json({ error: err.message });
+        }
+    });
+
+    // One user's overview: who they are and how each number they see in a project was built.
+    // Only the validated id/project_id are put into the backend path (no caller-chosen paths).
+    app.get('/api/users/:platform/:id/overview', async (req, res) => {
+        const { platform, id } = req.params;
+        if (!PLATFORMS.includes(platform)) return res.status(400).json({ error: 'platform must be tiktok or instagram' });
+        if (!OVERVIEW_ID.test(id)) return res.status(400).json({ error: 'id has an invalid format' });
+        const projectId = req.query.project_id;
+        if (projectId !== undefined && projectId !== '' && (typeof projectId !== 'string' || !UUID.test(projectId))) {
+            return res.status(400).json({ error: 'project_id must be a UUID' });
+        }
+        const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        try {
+            const r = await call(backends[platform], `/api/admin/users/${encodeURIComponent(id)}/overview${qs}`, { timeoutMs: USAGE_TIMEOUT_MS });
+            if (!r.ok) return res.status(r.status === 404 ? 404 : 502).json({ error: backendError(r, 'The user overview') });
+            if (!r.body || typeof r.body !== 'object') return res.status(502).json({ error: 'The backend sent an unreadable answer' });
+            res.json({ ...pick(r.body, OVERVIEW_FIELDS), sessions: safeDetail(r.body.sessions || []), platform });
         } catch (err) {
             res.status(502).json({ error: err.message });
         }

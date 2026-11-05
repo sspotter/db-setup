@@ -4,7 +4,12 @@ const { platformGuard, isOnPlatform } = require('../../middleware/platformGuard'
 
 const app = express();
 app.use(express.json());
-app.post('/posts', platformGuard, (req, res) => res.json({ success: true }));
+app.post('/posts', platformGuard, (req, res) => res.json({
+    success: true,
+    saved: (req.body.posts || []).map((p) => p.shortcode),
+    skipped: res.locals.skippedOtherPlatform,
+    reason: res.locals.activity && res.locals.activity.reason,
+}));
 
 describe('platformGuard (Instagram backend)', () => {
     it('accepts instagram.com urls, including subdomains', () => {
@@ -28,13 +33,31 @@ describe('platformGuard (Instagram backend)', () => {
         expect(res.status).toBe(200);
     });
 
-    it('rejects the whole batch with WRONG_PLATFORM when any post is foreign', async () => {
+    it('saves the own-platform posts and reports how many foreign ones it skipped', async () => {
         const res = await request(app).post('/posts').send({ posts: [
             { shortcode: 'a', postUrl: 'https://www.instagram.com/p/a/' },
-            { shortcode: 'b', postUrl: 'https://www.tiktok.com/v/b' },
+            { shortcode: 'b', postUrl: 'https://www.tiktok.com/@b/video/1' },
+            { shortcode: 'c' },
+        ] });
+        expect(res.status).toBe(200);
+        expect(res.body.saved).toEqual(['a', 'c']);
+        expect(res.body.skipped).toBe(1);
+        expect(res.body.reason).toBe('foreign_posts_skipped');
+    });
+
+    it('still refuses a batch with nothing from this platform: that means a wrong API URL', async () => {
+        const res = await request(app).post('/posts').send({ posts: [
+            { shortcode: 'b', postUrl: 'https://www.tiktok.com/@b/video/1' },
+            { shortcode: 'd', postUrl: 'https://www.tiktok.com/@b/video/1' },
         ] });
         expect(res.status).toBe(400);
         expect(res.body.code).toBe('WRONG_PLATFORM');
-        expect(res.body.error).toContain('1 of 2');
+        expect(res.body.error).toContain('none of the 2');
+    });
+
+    it('refuses a single foreign post sent without a posts array', async () => {
+        const res = await request(app).post('/posts').send({ shortcode: 'b', postUrl: 'https://www.tiktok.com/@b/video/1' });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('WRONG_PLATFORM');
     });
 });

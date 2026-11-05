@@ -9,3 +9,6 @@ Instasurf_website
 docs/
 
 codes.txt
+
+# Local copy of production databases (client data): never commit
+local-db/

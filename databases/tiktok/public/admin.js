@@ -1295,6 +1295,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${renderLastIssue(user.last_issue, user.last_seen)}</td>
                 <td>${createdAtLocale}</td>
                 <td>
+                    <button class="action-btn overview" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Overview (what this user sees, with formulas)">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
                     <button class="action-btn projects" data-id="${user.id}" data-email="${escapeHTML(user.email)}" title="Projects (delete)">
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                     </button>
@@ -1316,6 +1319,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 </td>
             `;
             usersTbody.appendChild(tr);
+        });
+
+        document.querySelectorAll('.action-btn.overview').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const t = e.currentTarget;
+                openOverviewModal(t.getAttribute('data-id'), t.getAttribute('data-email'));
+            });
         });
 
         document.querySelectorAll('.action-btn.projects').forEach(btn => {
@@ -1464,6 +1474,141 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(err.message, 'error');
         }
     }
+
+    // ---- User overview: read-only view of what a user sees, with the formula behind each number ----
+    const overviewModal = document.getElementById('overview-modal');
+    const overviewTitle = document.getElementById('overview-modal-title');
+    const overviewUserEl = document.getElementById('overview-user');
+    const overviewProject = document.getElementById('overview-project');
+    const overviewWarnings = document.getElementById('overview-warnings');
+    const overviewMetrics = document.getElementById('overview-metrics');
+    const overviewBreakdown = document.getElementById('overview-breakdown');
+    const overviewTabs = document.getElementById('overview-tabs');
+    const overviewTabBody = document.getElementById('overview-tab-body');
+    const overviewBrowserOnly = document.getElementById('overview-browser-only');
+    const overviewLoading = document.getElementById('overview-loading');
+    const overviewError = document.getElementById('overview-error');
+    let overviewUser = null;
+    let overviewData = null;
+    let overviewTab = 'posts';
+    let overviewMetricKey = null;
+
+    // Every value that reaches innerHTML below goes through ovEsc (null shows as empty, 0 stays 0).
+    const ovEsc = (v) => escapeHTML(v === null || v === undefined ? '' : String(v));
+    const ovNum = (v) => (typeof v === 'number' ? v.toLocaleString() : ovEsc(v));
+    const ovDate = (v) => (v ? new Date(v).toLocaleString() : '');
+
+    async function openOverviewModal(userId, email) {
+        overviewUser = { id: userId, email };
+        overviewTitle.textContent = `Overview of ${email}`;
+        overviewTab = 'posts';
+        overviewMetricKey = null;
+        overviewProject.innerHTML = '';
+        openModal(overviewModal);
+        await loadOverview(null);
+    }
+
+    async function loadOverview(projectId) {
+        overviewError.classList.add('hidden');
+        overviewLoading.classList.remove('hidden');
+        try {
+            const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+            overviewData = await adminGet(`/api/admin/users/${encodeURIComponent(overviewUser.id)}/overview${q}`);
+            renderOverview();
+        } catch (err) {
+            overviewError.textContent = err.message;
+            overviewError.classList.remove('hidden');
+        } finally {
+            overviewLoading.classList.add('hidden');
+        }
+    }
+
+    overviewProject.addEventListener('change', () => { overviewMetricKey = null; loadOverview(overviewProject.value); });
+
+    function renderOverview() {
+        const d = overviewData;
+        const u = d.user;
+        overviewUserEl.innerHTML = `
+            <div><strong>${ovEsc(u.email)}</strong> · <span class="badge status-${ovEsc(u.status)}">${ovEsc(u.status)}</span> · plan <strong>${ovEsc(u.plan)}</strong>${u.plan_expires_at ? ` (expires ${ovEsc(ovDate(u.plan_expires_at))})` : ''}${u.trial_ends_at ? ` (trial ends ${ovEsc(ovDate(u.trial_ends_at))})` : ''}</div>
+            <div>Devices ${ovEsc(u.active_sessions)} / ${ovEsc(u.max_devices)} · last login ${u.last_login ? ovEsc(ovDate(u.last_login)) : 'never'} · created ${ovEsc(ovDate(u.created_at))}</div>`;
+        overviewProject.innerHTML = d.projects.map(p =>
+            `<option value="${ovEsc(p.id)}"${p.id === d.selected_project_id ? ' selected' : ''}>${ovEsc(p.name)} (${ovEsc(p.posts)} posts, ${ovEsc(p.profiles)} profiles)</option>`
+        ).join('') || '<option value="">No projects</option>';
+
+        overviewWarnings.innerHTML = d.warnings.map(w =>
+            `<div class="ov-warn ${ovEsc(w.severity)}"><strong>${ovEsc(w.code)}</strong> · ${ovEsc(w.message)}</div>`).join('');
+
+        overviewMetrics.innerHTML = d.metrics.map(m => `
+            <button type="button" class="ov-metric${m.key === overviewMetricKey ? ' active' : ''}" data-key="${ovEsc(m.key)}">
+                <div class="ov-label">${ovEsc(m.label)}</div>
+                <div class="ov-value">${ovNum(m.value)}</div>
+                ${m.hidden_included ? `<div class="ov-flag">${ovEsc(m.hidden_included)} hidden/deleted included${m.value_without_hidden !== undefined ? ` · without them ${ovNum(m.value_without_hidden)}` : ''}</div>` : ''}
+            </button>`).join('') || '<p class="ov-muted">No project selected.</p>';
+        overviewMetrics.querySelectorAll('.ov-metric').forEach(b =>
+            b.addEventListener('click', () => { overviewMetricKey = b.getAttribute('data-key'); renderOverview(); }));
+
+        renderBreakdown();
+        overviewBrowserOnly.innerHTML = d.browser_only.map(s => `<li>${ovEsc(s)}</li>`).join('');
+        overviewTabs.querySelectorAll('.ov-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === overviewTab));
+        renderOverviewTab();
+    }
+
+    // A table from [{key,label,numeric}] columns; rows flagged hidden/deleted are tinted.
+    function ovTable(columns, rows, total, excludedOf) {
+        if (!rows.length) return '<p class="ov-muted" style="padding:10px">No rows.</p>';
+        const head = columns.map(c => `<th${c.numeric ? ' class="ov-num"' : ''}>${ovEsc(c.label)}</th>`).join('');
+        const show = (c, v) => (c.numeric ? ovNum(v) : ovEsc(v));
+        const cell = (c, r) => `<td${c.numeric ? ' class="ov-num"' : ''}>${show(c, r[c.key])}</td>`;
+        const body = rows.map(r => `<tr${excludedOf && excludedOf(r) ? ' class="ov-excluded"' : ''}>${columns.map(c => cell(c, r)).join('')}</tr>`).join('');
+        const foot = total ? `<tfoot><tr>${columns.map(c => `<td${c.numeric ? ' class="ov-num"' : ''}><strong>${total[c.key] === null || total[c.key] === undefined ? '' : show(c, total[c.key])}</strong></td>`).join('')}</tr></tfoot>` : '';
+        return `<table class="ov-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table>`;
+    }
+
+    function renderBreakdown() {
+        const m = overviewData.metrics.find(x => x.key === overviewMetricKey);
+        if (!m) {
+            overviewBreakdown.innerHTML = '<p class="ov-muted">Click a number to see how it was built.</p>';
+            return;
+        }
+        const b = m.breakdown ? overviewData.breakdowns[m.breakdown] : null;
+        overviewBreakdown.innerHTML = `
+            <h4>${ovEsc(m.label)} = ${ovNum(m.value)}</h4>
+            <div class="ov-formula">${ovEsc(m.formula)}</div>
+            <div class="ov-muted">Inputs: ${m.inputs.map(ovEsc).join(', ')}</div>
+            ${b ? `<p class="ov-muted">${ovEsc(b.explain)}</p><div class="table-container">${ovTable(b.columns, b.rows, b.total, r => r.state && r.state !== 'ok')}</div>` : ''}`;
+    }
+
+    function renderOverviewTab() {
+        const d = overviewData;
+        const tabs = {
+            posts: () => ovTable([
+                { key: 'shortcode', label: 'Post' }, { key: 'owner', label: 'Owner' },
+                { key: 'likes', label: 'Likes', numeric: true }, { key: 'comments', label: 'Comments', numeric: true },
+                { key: 'views', label: 'Views', numeric: true }, { key: 'posted_at', label: 'Posted' },
+                { key: 'is_hidden', label: 'Hidden' }, { key: 'deleted_at', label: 'Deleted' },
+            ], d.posts.map(p => ({ ...p, posted_at: ovDate(p.posted_at), is_hidden: p.is_hidden ? 'hidden' : '', deleted_at: ovDate(p.deleted_at) })), null, r => r.is_hidden || r.deleted_at),
+            creators: () => ovTable([
+                { key: 'username', label: 'Creator' }, { key: 'role', label: 'Role' },
+                { key: 'follower_count', label: 'Followers', numeric: true }, { key: 'posts', label: 'Posts', numeric: true },
+                { key: 'adds', label: 'Adds', numeric: true }, { key: 'scraped_at', label: 'Last seen' }, { key: 'observed_at', label: 'Observed' },
+            ], d.creators.map(c => ({ ...c, scraped_at: ovDate(c.scraped_at), observed_at: ovDate(c.observed_at) }))),
+            save_history: () => ovTable([
+                { key: 'at', label: 'When' }, { key: 'action', label: 'Action' }, { key: 'detail', label: 'Detail' }, { key: 'source', label: 'Source' },
+            ], d.save_history.map(h => ({ ...h, at: ovDate(h.at) }))),
+            sessions: () => (d.sessions.length ? ovTable([
+                { key: 'at', label: 'Login' }, { key: 'ip', label: 'IP' }, { key: 'user_agent', label: 'Device' }, { key: 'ext_version', label: 'Extension' }, { key: 'source', label: 'Source' },
+            ], d.sessions.map(s => ({ ...s, at: ovDate(s.at) }))) : '<p class="ov-muted" style="padding:10px">No session or device rows are available.</p>'),
+        };
+        overviewTabBody.innerHTML = (tabs[overviewTab] || tabs.posts)();
+    }
+
+    overviewTabs.addEventListener('click', (e) => {
+        const t = e.target.closest('.ov-tab');
+        if (!t || !overviewData) return;
+        overviewTab = t.getAttribute('data-tab');
+        overviewTabs.querySelectorAll('.ov-tab').forEach(x => x.classList.toggle('active', x === t));
+        renderOverviewTab();
+    });
 
     // ---- Projects modal: choose a user's project and delete it ----
     const projectsModal = document.getElementById('projects-modal');

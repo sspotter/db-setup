@@ -67,6 +67,7 @@ function showLogin(message) {
     stopAutoRefresh();
     // Closing an on-demand panel also empties it, so no user rows stay in the page after logout.
     document.querySelectorAll('details.on-demand').forEach((d) => { d.open = false; });
+    if (typeof uoClose === 'function') uoClose();
 }
 
 function showApp() {
@@ -537,6 +538,7 @@ async function loadEvents() {
 // ---- Users ----
 
 let usersData = [];
+let usersLoadedPlatform = 'tiktok';
 
 function when(v) {
     return v ? new Date(v).toLocaleString() : null;
@@ -556,7 +558,12 @@ function renderUsers() {
         });
     for (const u of rows) {
         const tr = el('tr');
-        tr.appendChild(el('td', { text: fmtVal(u.email) }));
+        const emailTd = el('td');
+        const openBtn = el('button', { className: 'ip-link uo-open', text: fmtVal(u.email), attrs: { type: 'button', title: 'Open user overview' } });
+        openBtn.style.marginLeft = '0';
+        openBtn.addEventListener('click', () => { uo.metric = null; loadUserOverview(usersLoadedPlatform, u.id, u.email, null); });
+        emailTd.appendChild(openBtn);
+        tr.appendChild(emailTd);
         const st = el('td');
         st.appendChild(el('span', { className: `badge ${u.status === 'active' ? 'up' : 'down'}`, text: fmtVal(u.status) }));
         tr.appendChild(st);
@@ -588,6 +595,8 @@ async function loadUsers() {
             return;
         }
         usersData = (await res.json()).users || [];
+        usersLoadedPlatform = usersPlatform.value;
+        uoUserLists[usersLoadedPlatform] = usersData;
         const statuses = [...new Set(usersData.map((u) => u.status).filter(Boolean))].sort();
         clear(usersStatus);
         const any = el('option', { text: 'Any status' });
@@ -609,6 +618,294 @@ usersPlatform.addEventListener('change', loadUsers);
 usersSearch.addEventListener('input', renderUsers);
 usersStatus.addEventListener('change', renderUsers);
 usersSort.addEventListener('change', renderUsers);
+
+// ---- User overview ----
+
+const uoPanel = document.getElementById('uo-panel');
+const uoNote = document.getElementById('uo-note');
+const uoHead = document.getElementById('uo-head');
+const uoWarnings = document.getElementById('uo-warnings');
+const uoTiles = document.getElementById('uo-tiles');
+const uoDetail = document.getElementById('uo-detail');
+const uoTabs = document.getElementById('uo-tabs');
+const uoTabPanel = document.getElementById('uo-tabpanel');
+const uoProject = document.getElementById('uo-project');
+const UO_ROW_CAP = 500;
+const UO_TABS = [['posts', 'Posts'], ['creators', 'Creators'], ['save_history', 'Save history'], ['sessions', 'Sessions / devices']];
+const UO_POST_COLUMNS = [['shortcode', 'Post'], ['owner', 'Owner'], ['likes', 'Likes', true], ['comments', 'Comments', true]];
+const UO_CREATOR_COLUMNS = [
+    ['username', 'Creator'], ['role', 'Role'], ['follower_count', 'Followers', true], ['scraped_at', 'Scraped at'],
+    ['observed_at', 'Observed at'], ['posts', 'Posts', true], ['adds', 'Adds', true],
+];
+let uo = { platform: null, id: null, email: '', data: null, metric: null, tab: 'posts', latest: 0 };
+const uoUserLists = {}; // platform -> users, to find the same email on the other backend
+
+function uoCell(key, v) {
+    if (v === null || v === undefined || v === '') return '—';
+    if (typeof v === 'number') return v.toLocaleString();
+    if (typeof v === 'boolean') return v ? 'yes' : 'no';
+    if (typeof v === 'object') return JSON.stringify(v);
+    if (/(^at|_at)$/.test(key) && !isNaN(Date.parse(v))) return new Date(v).toLocaleString();
+    return String(v);
+}
+
+// columns: [{key,label,numeric}]; rows: objects; total: object or null.
+function uoTable(columns, rows, total) {
+    const wrap = el('div', { className: 'table-container' });
+    const table = el('table');
+    const head = el('tr');
+    columns.forEach((c) => head.appendChild(el('th', { text: c.label || c.key, className: c.numeric ? 'num' : '' })));
+    table.appendChild(el('thead')).appendChild(head);
+    const body = el('tbody');
+    rows.slice(0, UO_ROW_CAP).forEach((r) => {
+        const tr = el('tr');
+        columns.forEach((c) => {
+            const v = r ? r[c.key] : undefined;
+            const td = el('td', { text: uoCell(c.key, v), className: c.numeric ? 'num' : '' });
+            if (v === null || v === undefined) td.title = 'No value';
+            tr.appendChild(td);
+        });
+        body.appendChild(tr);
+    });
+    if (!rows.length) {
+        const tr = el('tr');
+        tr.appendChild(el('td', { text: 'No rows', attrs: { colspan: String(columns.length || 1) } }));
+        body.appendChild(tr);
+    }
+    table.appendChild(body);
+    if (total && typeof total === 'object') {
+        const tr = el('tr', { className: 'uo-total' });
+        columns.forEach((c, i) => {
+            const v = total[c.key];
+            tr.appendChild(el('td', { text: v === undefined && i === 0 ? 'Total' : uoCell(c.key, v), className: c.numeric ? 'num' : '' }));
+        });
+        table.appendChild(el('tfoot')).appendChild(tr);
+    }
+    wrap.appendChild(table);
+    if (rows.length > UO_ROW_CAP) {
+        const f = el('div');
+        f.appendChild(wrap);
+        f.appendChild(el('p', { className: 'checks-note', text: `Showing the first ${UO_ROW_CAP} of ${rows.length} rows.` }));
+        return f;
+    }
+    return wrap;
+}
+
+// Known columns first (only if any row has them), then other fields, so extra platform fields still show.
+function uoAutoColumns(rows, known) {
+    const sample = rows.slice(0, 50);
+    const cols = known.filter(([k]) => sample.some((r) => r && r[k] !== undefined)).map(([key, label, numeric]) => ({ key, label, numeric: !!numeric }));
+    const seen = new Set(cols.map((c) => c.key));
+    sample.forEach((r) => Object.keys(r || {}).forEach((k) => {
+        if (!seen.has(k) && cols.length < 14) {
+            seen.add(k);
+            cols.push({ key: k, label: k.replace(/_/g, ' '), numeric: typeof r[k] === 'number' });
+        }
+    }));
+    return cols;
+}
+
+function uoSummary(d) {
+    clear(uoHead);
+    const u = d.user || {};
+    const items = [
+        ['Email', u.email], ['Status', u.status], ['Plan', u.plan],
+        ['Plan expires', when(u.plan_expires_at)], ['Trial ends', when(u.trial_ends_at)],
+        ['Devices', `${fmtVal(u.active_sessions)} / ${fmtVal(u.max_devices)}`],
+        ['Last login', when(u.last_login)], ['Created', when(u.created_at)],
+    ];
+    items.forEach(([label, value]) => {
+        const box = el('div', { className: 'uo-fact' });
+        box.appendChild(el('span', { className: 'uo-fact-label', text: label }));
+        if (label === 'Status') {
+            box.appendChild(el('span', { className: `badge ${value === 'active' ? 'up' : 'down'}`, text: fmtVal(value) }));
+        } else {
+            box.appendChild(el('span', { text: fmtVal(value) }));
+        }
+        uoHead.appendChild(box);
+    });
+}
+
+function uoWarningsRender(list) {
+    clear(uoWarnings);
+    (Array.isArray(list) ? list : []).forEach((w) => {
+        const sev = ['bad', 'warn', 'info'].includes(w && w.severity) ? w.severity : 'info';
+        const row = el('div', { className: `uo-warning ${sev}` });
+        row.appendChild(el('span', { className: 'uo-pill', text: sev }));
+        row.appendChild(el('span', { text: fmtVal(w && w.message) }));
+        if (w && w.code) row.appendChild(el('code', { text: String(w.code) }));
+        uoWarnings.appendChild(row);
+    });
+}
+
+function uoTilesRender(d) {
+    clear(uoTiles);
+    const add = (key, label, value, extra) => {
+        const b = el('button', { className: 'uo-tile' + (uo.metric === key ? ' active' : ''), attrs: { type: 'button' } });
+        b.appendChild(el('span', { className: 'uo-tile-label', text: label }));
+        b.appendChild(el('span', { className: 'uo-tile-value', text: typeof value === 'number' ? value.toLocaleString() : fmtVal(value) }));
+        if (extra) b.classList.add(extra);
+        b.addEventListener('click', () => { uo.metric = key; uoTilesRender(d); uoDetailRender(d); });
+        uoTiles.appendChild(b);
+    };
+    (d.metrics || []).forEach((m) => add(`m:${m.key}`, m.label || m.key, m.value));
+    add('browser', "On the user's screen: ?", (d.browser_only || []).length, 'browser');
+}
+
+function uoDetailRender(d) {
+    clear(uoDetail);
+    if (uo.metric === 'browser') {
+        uoDetail.appendChild(el('h3', { text: "On the user's screen" }));
+        uoDetail.appendChild(el('p', { className: 'uo-explain', text: "The user's browser computes these numbers itself, so the server cannot see or check them." }));
+        const items = d.browser_only || [];
+        if (!items.length) uoDetail.appendChild(el('p', { className: 'checks-note', text: 'Nothing listed.' }));
+        const ul = el('ul', { className: 'uo-list' });
+        items.forEach((s) => ul.appendChild(el('li', { text: String(s) })));
+        uoDetail.appendChild(ul);
+        return;
+    }
+    const m = (d.metrics || []).find((x) => `m:${x.key}` === uo.metric);
+    if (!m) {
+        uoDetail.appendChild(el('p', { className: 'checks-note', text: 'Click a number on the left to see how it was built.' }));
+        return;
+    }
+    const bd = m.breakdown && d.breakdowns ? d.breakdowns[m.breakdown] : null;
+    uoDetail.appendChild(el('h3', { text: m.label || m.key }));
+    uoDetail.appendChild(el('div', { className: 'uo-big', text: typeof m.value === 'number' ? m.value.toLocaleString() : fmtVal(m.value) }));
+    const section = (title, node) => {
+        uoDetail.appendChild(el('h4', { text: title }));
+        uoDetail.appendChild(node);
+    };
+    if (bd && bd.explain) section('How it was built', el('p', { className: 'uo-explain', text: String(bd.explain) }));
+    if (m.formula) section('Formula', el('code', { className: 'uo-formula', text: String(m.formula) }));
+    if (Array.isArray(m.inputs) && m.inputs.length) {
+        const ul = el('ul', { className: 'uo-list' });
+        m.inputs.forEach((s) => ul.appendChild(el('li', { text: String(s) })));
+        section('Inputs', ul);
+    }
+    if (bd) {
+        const cols = Array.isArray(bd.columns) && bd.columns.length ? bd.columns : uoAutoColumns(bd.rows || [], []);
+        section(bd.title || 'Rows behind this number', uoTable(cols, bd.rows || [], bd.total));
+    } else if (m.breakdown) {
+        uoDetail.appendChild(el('p', { className: 'checks-note', text: 'The backend did not send the rows for this number.' }));
+    }
+}
+
+function uoTabsRender(d) {
+    clear(uoTabs);
+    UO_TABS.forEach(([key, label]) => {
+        const count = Array.isArray(d[key]) ? d[key].length : 0;
+        const b = el('button', { className: 'uo-tab' + (uo.tab === key ? ' active' : ''), text: `${label} (${count})`, attrs: { type: 'button', role: 'tab' } });
+        b.addEventListener('click', () => { uo.tab = key; uoTabsRender(d); });
+        uoTabs.appendChild(b);
+    });
+    clear(uoTabPanel);
+    const rows = Array.isArray(d[uo.tab]) ? d[uo.tab] : [];
+    let cols;
+    if (uo.tab === 'creators') {
+        cols = UO_CREATOR_COLUMNS.map(([key, label, numeric]) => ({ key, label, numeric: !!numeric }));
+    } else if (uo.tab === 'save_history') {
+        cols = [{ key: 'at', label: 'When' }, { key: 'action', label: 'Action' }, { key: 'detail', label: 'Detail' }];
+    } else {
+        cols = uoAutoColumns(rows, uo.tab === 'posts' ? UO_POST_COLUMNS : []);
+    }
+    uoTabPanel.appendChild(uoTable(cols, rows, null));
+}
+
+function uoRender(d) {
+    uoSummary(d);
+    uoWarningsRender(d.warnings);
+    clear(uoProject);
+    const projects = Array.isArray(d.projects) ? d.projects : [];
+    if (!projects.length) uoProject.appendChild(el('option', { text: 'No projects' }));
+    projects.forEach((p) => {
+        const o = el('option', { text: `${fmtVal(p.name)} (${fmtVal(p.posts)} posts, ${fmtVal(p.profiles)} profiles)` });
+        o.value = p.id;
+        if (p.id === d.selected_project_id) o.selected = true;
+        uoProject.appendChild(o);
+    });
+    uoProject.disabled = !projects.length;
+    if (!uo.metric || (uo.metric !== 'browser' && !(d.metrics || []).some((m) => `m:${m.key}` === uo.metric))) {
+        uo.metric = d.metrics && d.metrics.length ? `m:${d.metrics[0].key}` : (d.browser_only && d.browser_only.length ? 'browser' : null);
+    }
+    uoTilesRender(d);
+    uoDetailRender(d);
+    uoTabsRender(d);
+}
+
+function uoClearBody() {
+    [uoHead, uoWarnings, uoTiles, uoDetail, uoTabs, uoTabPanel, uoProject].forEach(clear);
+}
+
+function uoMarkPlatform(platform) {
+    document.querySelectorAll('.uo-seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.platform === platform));
+}
+
+async function loadUserOverview(platform, id, email, projectId) {
+    const mine = ++uo.latest;
+    uo.platform = platform;
+    uo.id = id;
+    uo.email = email;
+    uoPanel.classList.remove('hidden');
+    uoMarkPlatform(platform);
+    uoClearBody();
+    uoNote.textContent = `Loading ${email || id} on ${platformName(platform)}...`;
+    uoPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+        const params = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
+        const res = await api(`/api/users/${encodeURIComponent(platform)}/${encodeURIComponent(id)}/overview${params}`);
+        const data = await res.json().catch(() => ({}));
+        if (mine !== uo.latest) return;
+        if (!res.ok) {
+            uoNote.textContent = `Could not load the overview: ${data.error || 'HTTP ' + res.status}`;
+            return;
+        }
+        uo.data = data;
+        uoNote.textContent = `${fmtVal((data.user || {}).email || email)} on ${platformName(platform)}`;
+        uoRender(data);
+    } catch (err) {
+        if (mine === uo.latest && err.message !== 'unauthorized') uoNote.textContent = 'Could not reach server';
+    }
+}
+
+// The same person has a separate id (and account) on each backend, so the switch looks the email up there.
+async function switchOverviewPlatform(platform) {
+    if (platform === uo.platform) return;
+    const mine = ++uo.latest;
+    uoClearBody();
+    uoNote.textContent = `Looking for ${uo.email} on ${platformName(platform)}...`;
+    try {
+        if (!uoUserLists[platform]) {
+            const res = await api(`/api/users?platform=${encodeURIComponent(platform)}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            uoUserLists[platform] = data.users || [];
+        }
+        if (mine !== uo.latest) return;
+        const u = uoUserLists[platform].find((x) => String(x.email || '').toLowerCase() === String(uo.email).toLowerCase());
+        if (!u) {
+            uoNote.textContent = `${uo.email} has no account on ${platformName(platform)}.`;
+            uo.platform = platform;
+            uoMarkPlatform(platform);
+            return;
+        }
+        uo.metric = null;
+        loadUserOverview(platform, u.id, uo.email, null);
+    } catch (err) {
+        if (mine === uo.latest && err.message !== 'unauthorized') uoNote.textContent = `Could not look up the user: ${err.message}`;
+    }
+}
+
+document.querySelectorAll('.uo-seg-btn').forEach((b) => b.addEventListener('click', () => switchOverviewPlatform(b.dataset.platform)));
+uoProject.addEventListener('change', () => { if (uoProject.value) loadUserOverview(uo.platform, uo.id, uo.email, uoProject.value); });
+function uoClose() {
+    uo.latest++;
+    uoPanel.classList.add('hidden');
+    uoClearBody();
+    uoNote.textContent = '';
+    for (const k of Object.keys(uoUserLists)) delete uoUserLists[k];
+}
+document.getElementById('uo-close').addEventListener('click', uoClose);
 
 // ---- Panels that load when opened ----
 

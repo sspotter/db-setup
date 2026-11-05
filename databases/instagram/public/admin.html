@@ -426,6 +426,34 @@
         </div>
     </div>
 
+    <!-- User overview modal: read-only debug view of what a user sees in a project -->
+    <div id="overview-modal" class="modal-overlay hidden">
+        <div class="modal-content glass-panel large-modal">
+            <div class="modal-header">
+                <h3 id="overview-modal-title">User overview</h3>
+                <button class="close-modal-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="overview-top" class="ov-top"></div>
+                <div id="overview-warnings"></div>
+                <div class="ov-split">
+                    <div id="overview-metrics" class="ov-metrics"></div>
+                    <div id="overview-detail" class="ov-detail"><p class="ov-muted">Click a number to see how it was built.</p></div>
+                </div>
+                <div class="ov-tabs" id="overview-tabs">
+                    <button type="button" class="btn btn-secondary active" data-tab="posts">Posts</button>
+                    <button type="button" class="btn btn-secondary" data-tab="creators">Creators</button>
+                    <button type="button" class="btn btn-secondary" data-tab="history">Save history</button>
+                    <button type="button" class="btn btn-secondary" data-tab="sessions">Sessions / devices</button>
+                </div>
+                <div id="overview-tab-body" class="table-container"></div>
+                <div id="overview-browser-only" class="ov-muted"></div>
+                <div id="overview-loading" class="loading-spinner hidden"></div>
+                <div id="overview-error" class="error-message hidden"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification -->
     <div id="toast" class="toast hidden"></div>
 

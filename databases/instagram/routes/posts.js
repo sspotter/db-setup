@@ -295,6 +295,7 @@ router.post('/posts', platformGuard, async (req, res) => {
             updated,
             skipped,
             total: inserted + updated,
+            ...(res.locals.skippedOtherPlatform && { skipped_other_platform: res.locals.skippedOtherPlatform }),
             ...(errors.length > 0 && { errors }),
         });
     } catch (err) {
