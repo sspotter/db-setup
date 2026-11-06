@@ -21,17 +21,18 @@ const OTHER_PROJ = '33333333-3333-4333-8333-333333333333';
 const url = (q = '') => `/api/admin/users/${USER}/overview${q}`;
 const admin = (r) => r.set('x-admin-password', 'admin-test');
 
-// Fixture: 3 project posts. p3 is hidden, p4 is soft-deleted; p1 is the only plain one.
-// Likes 10 + 5 + 100 (hidden) ; comments 1 + 2 + 20 (hidden); p4 has 7 likes (deleted).
+// Fixture: 4 project links. p3 is hidden, p4 is soft-deleted; p1 and p2 are the visible ones.
+// Likes 10 + 5 (visible) + 100 (hidden) + 7 (deleted); comments 1 + 2 + 20 (hidden).
 const POSTS = [
     { shortcode: 'p1', post_row: 'p1', owner_username: 'alice', posted_at: '2026-01-03T00:00:00Z', likes: '10', comments: '1', views: '100', reposts: 0, shares: 2, bookmarks: 3, post_view_count: '0', pp_hidden: false, pp_deleted_at: null, post_deleted_at: null, foreign_url: false },
     { shortcode: 'p2', post_row: 'p2', owner_username: 'bob', posted_at: '2026-01-02T00:00:00Z', likes: '5', comments: '2', views: '50', reposts: 1, shares: 0, bookmarks: 0, post_view_count: '0', pp_hidden: false, pp_deleted_at: null, post_deleted_at: null, foreign_url: false },
     { shortcode: 'p3', post_row: 'p3', owner_username: 'alice', posted_at: '2026-01-01T00:00:00Z', likes: '100', comments: '20', views: '1000', reposts: 0, shares: 0, bookmarks: 0, post_view_count: '0', pp_hidden: true, pp_deleted_at: null, post_deleted_at: null, foreign_url: false },
     { shortcode: 'p4', post_row: 'p4', owner_username: 'bob', posted_at: null, likes: '7', comments: '0', views: '0', reposts: 0, shares: 0, bookmarks: 0, post_view_count: '0', pp_hidden: false, pp_deleted_at: '2026-02-01T00:00:00Z', post_deleted_at: null, foreign_url: false },
 ];
+// What the creators query returns when it excludes hidden/deleted links (as the app does).
 const CREATORS = [
-    { username: 'alice', posts_involved: '2', follower_count: '1000', scraped_at: '2026-01-05T00:00:00Z', role: 'brand', adds: '2' },
-    { username: 'bob', posts_involved: '2', follower_count: '1234', scraped_at: null, role: 'competitor', adds: '2' },
+    { username: 'alice', posts_involved: '1', follower_count: '1000', scraped_at: '2026-01-05T00:00:00Z', role: 'brand', adds: '1' },
+    { username: 'bob', posts_involved: '1', follower_count: '1234', scraped_at: null, role: 'competitor', adds: '1' },
 ];
 
 function dbError(code) { const e = new Error(code); e.code = code; return e; }
@@ -43,7 +44,6 @@ function mockDb(over = {}) {
         projects: () => ({ rows: [{ id: PROJ, name: 'Barbican', created_at: '2025-02-01T00:00:00Z', posts: 4, profiles: 2 }] }),
         posts: () => ({ rows: POSTS }),
         creators: () => ({ rows: CREATORS }),
-        creatorsClean: () => ({ rows: [{ follower_count: '1000', posts_involved: '1' }, { follower_count: '1234', posts_involved: '1' }] }),
         kwSummary: () => ({ rows: [{ total_videos: '5', total_views: '900', potential_reach: '400' }] }),
         kwRows: () => ({ rows: [{ keyword: 'tea', videos: '5', reach_videos: '4', reach_views: '400', hidden_reach_videos: '1', hidden_reach_views: '150' }] }),
         comments: () => ({ rows: [{ shortcode: 'p1', stored: '3' }] }),
@@ -60,7 +60,7 @@ function mockDb(over = {}) {
         if (/FROM users WHERE id/.test(s)) key = 'user';
         else if (/FROM projects pr/.test(s)) key = 'projects';
         else if (/FROM project_posts ppo\s+LEFT JOIN posts p/.test(s)) key = 'posts';
-        else if (/WITH project_posts_cte/.test(s)) key = /ppo\.is_hidden = false/.test(s) ? 'creatorsClean' : 'creators';
+        else if (/WITH project_posts_cte/.test(s)) key = 'creators';
         else if (/FROM search_keywords WHERE/.test(s)) key = 'kwSummary';
         else if (/FROM tiktok_videos tv/.test(s)) key = 'kwRows';
         else if (/FROM comments c/.test(s)) key = 'comments';
@@ -140,50 +140,64 @@ describe('GET /api/admin/users/:id/overview', () => {
 
     it('computes the metrics with the app formulas on the fixture', async () => {
         const { body } = await admin(request(app).get(url()));
-        expect(metricOf(body, 'posts').value).toBe(4);
-        expect(metricOf(body, 'likes').value).toBe(122);
-        expect(metricOf(body, 'comments').value).toBe(23);
-        expect(metricOf(body, 'views').value).toBe(1150);
+        // Hidden p3 and deleted p4 are excluded, exactly as the app's /stats and /compare do.
+        expect(metricOf(body, 'posts').value).toBe(2);
+        expect(metricOf(body, 'likes').value).toBe(15);
+        expect(metricOf(body, 'comments').value).toBe(3);
+        expect(metricOf(body, 'views').value).toBe(150);
         expect(metricOf(body, 'shares').value).toBe(2);
         expect(metricOf(body, 'reposts').value).toBe(1);
         expect(metricOf(body, 'bookmarks').value).toBe(3);
-        expect(metricOf(body, 'engagement').value).toBe(145);
-        expect(metricOf(body, 'avg_epm').value).toBe(36.3); // ROUND(145 / 4, 1)
-        // followers x posts: 1000 x 2 + 1234 x 2
-        expect(metricOf(body, 'potential_impressions').value).toBe(4468);
+        expect(metricOf(body, 'engagement').value).toBe(18);
+        expect(metricOf(body, 'avg_epm').value).toBe(9); // ROUND(18 / 2, 1)
+        // followers x posts: 1000 x 1 + 1234 x 1
+        expect(metricOf(body, 'potential_impressions').value).toBe(2234);
         expect(metricOf(body, 'keyword_potential_reach').value).toBe(400);
         expect(metricOf(body, 'comments_stored').value).toBe(3);
-        expect(body.breakdowns.likes.total.likes).toBe(122);
-        expect(body.breakdowns.reach.rows.map((r) => r.impressions)).toEqual([2000, 2468]);
+        expect(body.breakdowns.likes.total.likes).toBe(15);
+        expect(body.breakdowns.likes.rows.map((r) => r.shortcode).sort()).toEqual(['p1', 'p2']);
+        expect(body.breakdowns.reach.rows.map((r) => r.impressions)).toEqual([1000, 1234]);
     });
 
-    it('also reports the value without hidden/deleted rows', async () => {
+    it('uses the same visibility filter as the app in every project_posts query', async () => {
+        await admin(request(app).get(url()));
+        const sqls = pool.query.mock.calls.map((c) => String(c[0]));
+        const creators = sqls.find((s) => /WITH project_posts_cte/.test(s));
+        expect(creators).toMatch(/WHERE ppo\.project_id = \$1\s+AND ppo\.is_hidden = false AND ppo\.deleted_at IS NULL/);
+        expect(creators).toMatch(/ppo2\.is_hidden = false AND ppo2\.deleted_at IS NULL/);
+        expect(sqls.find((s) => /FROM comments c/.test(s))).toMatch(/ppo\.is_hidden = false AND ppo\.deleted_at IS NULL/);
+        expect(sqls.find((s) => /FROM projects pr/.test(s))).toMatch(/pp\.is_hidden = false AND pp\.deleted_at IS NULL/);
+        // The posts list keeps every link (so an admin can unhide / restore it).
+        expect(sqls.find((s) => /FROM project_posts ppo\s+LEFT JOIN posts p/.test(s))).not.toMatch(/is_hidden = false/);
+    });
+
+    it('says in one info line how many hidden/deleted posts are excluded', async () => {
         const { body } = await admin(request(app).get(url()));
-        const likes = metricOf(body, 'likes');
-        expect(likes.hidden_included).toBe(2);
-        expect(likes.value_without_hidden).toBe(15);
-        expect(metricOf(body, 'potential_impressions').value_without_hidden).toBe(2234);
-        expect(metricOf(body, 'avg_epm').value_without_hidden).toBe(9); // (15 + 3) / 2
+        const w = body.warnings.filter((x) => x.code === 'hidden_excluded');
+        expect(w).toHaveLength(1);
+        expect(w[0].severity).toBe('info');
+        expect(w[0].message).toMatch(/^2 hidden\/deleted posts are excluded/);
+        expect(warningCodes(body).filter((c) => /^hidden_counted_(?!keyword)/.test(c))).toEqual([]);
+        // The old "included" fields are gone from the post totals (they stay on the keyword reach, which the app still counts).
+        for (const key of ['posts', 'likes', 'comments', 'views', 'engagement', 'avg_epm', 'potential_impressions']) {
+            expect(metricOf(body, key)).not.toHaveProperty('hidden_included');
+            expect(metricOf(body, key)).not.toHaveProperty('value_without_hidden');
+        }
     });
 
-    it('warns that hidden/deleted posts are counted, with numbers', async () => {
+    it('lists hidden and deleted links in the posts tab with a state', async () => {
         const { body } = await admin(request(app).get(url()));
-        const w = body.warnings.find((x) => x.code === 'hidden_counted_likes');
-        expect(w.severity).toBe('warn');
-        expect(w.message).toMatch(/2 hidden\/deleted post\(s\) are counted in Likes \(107 of 122\)/);
-        expect(warningCodes(body)).toEqual(expect.arrayContaining(['hidden_counted_posts', 'hidden_counted_potential_impressions']));
-        // The posts tab keeps them but flags them.
-        const p3 = body.posts.find((p) => p.shortcode === 'p3');
-        const p4 = body.posts.find((p) => p.shortcode === 'p4');
-        expect(p3.is_hidden).toBe(true);
-        expect(p4.deleted_at).toBe('2026-02-01T00:00:00.000Z');
-        expect(body.breakdowns.likes.rows.find((r) => r.shortcode === 'p3').state).toBe('hidden');
+        expect(body.posts).toHaveLength(4);
+        const find = (sc) => body.posts.find((p) => p.shortcode === sc);
+        expect(find('p1').state).toBe('visible');
+        expect(find('p3')).toMatchObject({ is_hidden: true, state: 'hidden' });
+        expect(find('p4')).toMatchObject({ deleted_at: '2026-02-01T00:00:00.000Z', state: 'deleted' });
     });
 
-    it('does not warn about hidden posts when there are none', async () => {
+    it('does not add the excluded line when nothing is hidden', async () => {
         mockDb({ posts: () => ({ rows: [POSTS[0], POSTS[1]] }) });
         const { body } = await admin(request(app).get(url()));
-        expect(warningCodes(body).filter((c) => c.startsWith('hidden_counted_') && !c.includes('keyword'))).toEqual([]);
+        expect(warningCodes(body)).not.toContain('hidden_excluded');
     });
 
     it('warns about round follower counts, the sticky rule and platform guard events', async () => {

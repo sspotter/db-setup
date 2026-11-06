@@ -16,6 +16,8 @@ const AUDIT_ACTIONS = [
     'admin_login', 'admin_login_failed', 'admin_login_locked',
     'user_create', 'user_update', 'user_logout', 'user_reset_link', 'user_delete',
     'project_delete',
+    'project_posts_hide', 'project_posts_unhide', 'project_posts_delete', 'project_posts_restore',
+    'project_creator_remove',
     'admin_account_create', 'admin_account_update', 'admin_account_delete',
     'ip_block', 'ip_unblock',
 ];

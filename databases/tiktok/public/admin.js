@@ -1488,10 +1488,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const overviewBrowserOnly = document.getElementById('overview-browser-only');
     const overviewLoading = document.getElementById('overview-loading');
     const overviewError = document.getElementById('overview-error');
+    const overviewConfirm = document.getElementById('overview-confirm');
     let overviewUser = null;
     let overviewData = null;
     let overviewTab = 'posts';
     let overviewMetricKey = null;
+    let overviewCreators = null; // GET .../creators for the selected project (null until loaded)
+    let overviewSelected = new Set(); // shortcodes ticked in the Posts tab
+    let overviewBusy = false;
+    let overviewPending = null; // the action waiting for the admin's confirmation
 
     // Every value that reaches innerHTML below goes through ovEsc (null shows as empty, 0 stays 0).
     const ovEsc = (v) => escapeHTML(v === null || v === undefined ? '' : String(v));
@@ -1511,10 +1516,17 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadOverview(projectId) {
         overviewError.classList.add('hidden');
         overviewLoading.classList.remove('hidden');
+        overviewSelected = new Set();
+        overviewCreators = null;
+        ovHideConfirm();
         try {
             const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
             overviewData = await adminGet(`/api/admin/users/${encodeURIComponent(overviewUser.id)}/overview${q}`);
             renderOverview();
+            if (overviewData.selected_project_id) {
+                overviewCreators = (await adminGet(`${ovProjectBase()}/creators`)).creators;
+                renderOverviewTab();
+            }
         } catch (err) {
             overviewError.textContent = err.message;
             overviewError.classList.remove('hidden');
@@ -1524,6 +1536,169 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     overviewProject.addEventListener('change', () => { overviewMetricKey = null; loadOverview(overviewProject.value); });
+
+    // ---- Admin actions: hide / unhide / delete / restore posts, remove a creator ----
+    // Every action first asks the server for a dry run (nothing changes), shows what it would do, and
+    // only then repeats the call with the count it was shown, so a stale preview cannot act.
+    const OV_VERB = { hide: 'Hide', unhide: 'Unhide', delete: 'Delete', restore: 'Restore' };
+    const OV_DONE = { hide: 'Hidden', unhide: 'Unhidden', delete: 'Deleted', restore: 'Restored' };
+    const ovPosts = (n) => `${n} post${n === 1 ? '' : 's'}`;
+
+    function ovProjectBase() {
+        return `/api/admin/users/${encodeURIComponent(overviewUser.id)}/projects/${encodeURIComponent(overviewData.selected_project_id)}`;
+    }
+    function ovProjectName() {
+        const p = overviewData.projects.find(x => x.id === overviewData.selected_project_id);
+        return p ? p.name : '';
+    }
+
+    async function adminPost(url, body) {
+        const res = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) });
+        if (res.status === 401) { clearAdminSession(); checkAuth(); throw new Error('Signed out'); }
+        let data = {};
+        try { data = await res.json(); } catch (e) { /* non-JSON error page */ }
+        if (!res.ok) {
+            const err = new Error(data.error || `Request failed (${res.status})`);
+            err.status = res.status;
+            err.data = data;
+            throw err;
+        }
+        return data;
+    }
+
+    function ovApplyBusy() {
+        overviewModal.querySelectorAll('.ov-act, .ov-bulk, .ov-pick, #ov-select-all, #ov-confirm-ok, #ov-confirm-cancel')
+            .forEach(el => { if (overviewBusy) el.disabled = true; else if (el.dataset.disabledWhenIdle !== '1') el.disabled = false; });
+    }
+    function ovSetBusy(busy) { overviewBusy = busy; ovApplyBusy(); }
+
+    function ovFail(err) {
+        overviewError.textContent = err.message;
+        overviewError.classList.remove('hidden');
+        showToast(err.message, 'error');
+    }
+
+    function ovHideConfirm() {
+        overviewPending = null;
+        overviewConfirm.classList.add('hidden');
+        overviewConfirm.innerHTML = '';
+    }
+
+    // spec: { kind: 'posts' | 'remove', action?, body, subject } where subject is e.g. "by @name" or "selected".
+    async function ovStart(spec) {
+        if (overviewBusy || !overviewData || !overviewData.selected_project_id) return;
+        overviewError.classList.add('hidden');
+        ovHideConfirm();
+        ovSetBusy(true);
+        try {
+            const path = `${ovProjectBase()}/${spec.kind === 'remove' ? 'profiles/remove' : 'posts/action'}`;
+            const preview = await adminPost(path, { ...spec.body, dry_run: true });
+            if (spec.kind === 'posts' && preview.affected === 0) {
+                showToast(`Nothing to ${spec.action}: no matching posts`, 'error');
+                return;
+            }
+            ovShowConfirm(spec, path, preview);
+        } catch (err) {
+            ovFail(err);
+        } finally {
+            ovSetBusy(false);
+        }
+    }
+
+    function ovShowConfirm(spec, path, preview) {
+        overviewPending = { spec, path, preview };
+        const project = ovProjectName();
+        const n = preview.affected;
+        let question;
+        let withPostsBox = '';
+        if (spec.kind === 'remove') {
+            question = `Remove @${spec.body.username} from '${project}'?`;
+            withPostsBox = `<label class="ov-confirm-row"><input type="checkbox" id="ov-confirm-withposts" checked> also delete their ${ovPosts(n)} in this project (${ovEsc(preview.profile_rows)} profile row${preview.profile_rows === 1 ? '' : 's'} removed)</label>`;
+        } else {
+            const what = spec.subject === 'selected'
+                ? `${ovPosts(n)}${n !== spec.body.shortcodes.length ? ` of the ${spec.body.shortcodes.length} selected` : ' selected'}`
+                : `${ovPosts(n)} by @${spec.subject}`;
+            question = `${OV_VERB[spec.action]} ${what} in '${project}'?`;
+        }
+        const needsWord = spec.kind === 'remove' || spec.action === 'delete';
+        overviewConfirm.innerHTML = `
+            <div class="ov-confirm-text">${ovEsc(question)}</div>
+            ${withPostsBox}
+            ${spec.action === 'delete' || spec.kind === 'remove' ? '<div class="ov-muted">Posts are soft-deleted for this project only (other projects and users keep them) and can be brought back with Restore.</div>' : ''}
+            ${needsWord ? '<div class="ov-confirm-row">Type <strong>DELETE</strong> to confirm: <input type="text" id="ov-confirm-word" autocomplete="off" aria-label="Type DELETE"></div>' : ''}
+            <div class="ov-confirm-row">
+                <button type="button" id="ov-confirm-ok" class="btn ${needsWord ? 'danger-btn' : 'primary-btn'}"${needsWord ? ' disabled data-disabled-when-idle="1"' : ''}>Confirm</button>
+                <button type="button" id="ov-confirm-cancel" class="btn secondary-btn">Cancel</button>
+            </div>`;
+        overviewConfirm.classList.remove('hidden');
+        overviewConfirm.scrollIntoView({ block: 'nearest' });
+        const word = document.getElementById('ov-confirm-word');
+        const ok = document.getElementById('ov-confirm-ok');
+        if (word) {
+            word.addEventListener('input', () => {
+                const match = word.value === 'DELETE';
+                ok.disabled = !match;
+                ok.dataset.disabledWhenIdle = match ? '0' : '1';
+            });
+        }
+    }
+
+    async function ovConfirm() {
+        if (overviewBusy || !overviewPending) return;
+        const { spec, path, preview } = overviewPending;
+        const word = document.getElementById('ov-confirm-word');
+        if (word && word.value !== 'DELETE') return;
+        const box = document.getElementById('ov-confirm-withposts');
+        const withPosts = box ? box.checked : true;
+        const body = spec.kind === 'remove'
+            ? { ...spec.body, with_posts: withPosts, dry_run: false, expect_count: withPosts ? preview.affected : 0 }
+            : { ...spec.body, dry_run: false, expect_count: preview.affected };
+        const projectId = overviewData.selected_project_id;
+        ovSetBusy(true);
+        try {
+            const result = await adminPost(path, body);
+            ovHideConfirm();
+            showToast(spec.kind === 'remove'
+                ? `Removed @${spec.body.username}${result.affected ? ` and deleted ${ovPosts(result.affected)}` : ''}`
+                : `${OV_DONE[spec.action]} ${ovPosts(result.affected)}`);
+            await loadOverview(projectId);
+        } catch (err) {
+            if (err.status === 409) {
+                ovHideConfirm();
+                err.message = `The number of posts changed (now ${err.data && err.data.affected}). Nothing was changed; try again.`;
+            }
+            ovFail(err);
+        } finally {
+            ovSetBusy(false);
+        }
+    }
+
+    // One delegated handler for everything inside the confirm box and the Posts / Creators tabs.
+    overviewModal.addEventListener('click', (e) => {
+        const t = e.target.closest('button');
+        if (!t) return;
+        if (t.id === 'ov-confirm-ok') { ovConfirm(); return; }
+        if (t.id === 'ov-confirm-cancel') { ovHideConfirm(); return; }
+        if (t.classList.contains('ov-act')) {
+            const name = t.getAttribute('data-user');
+            if (t.getAttribute('data-act') === 'remove') ovStart({ kind: 'remove', body: { username: name, with_posts: true } });
+            else ovStart({ kind: 'posts', action: t.getAttribute('data-act'), subject: name, body: { action: t.getAttribute('data-act'), creator: name } });
+        } else if (t.classList.contains('ov-bulk')) {
+            const action = t.getAttribute('data-act');
+            ovStart({ kind: 'posts', action, subject: 'selected', body: { action, shortcodes: [...overviewSelected] } });
+        }
+    });
+    overviewModal.addEventListener('change', (e) => {
+        const t = e.target;
+        if (t.id === 'ov-select-all') {
+            overviewSelected = t.checked ? new Set(overviewData.posts.map(p => p.shortcode)) : new Set();
+            renderOverviewTab();
+        } else if (t.classList.contains('ov-pick')) {
+            const code = t.getAttribute('data-code');
+            if (t.checked) overviewSelected.add(code); else overviewSelected.delete(code);
+            renderOverviewTab();
+        }
+    });
 
     function renderOverview() {
         const d = overviewData;
@@ -1542,7 +1717,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <button type="button" class="ov-metric${m.key === overviewMetricKey ? ' active' : ''}" data-key="${ovEsc(m.key)}">
                 <div class="ov-label">${ovEsc(m.label)}</div>
                 <div class="ov-value">${ovNum(m.value)}</div>
-                ${m.hidden_included ? `<div class="ov-flag">${ovEsc(m.hidden_included)} hidden/deleted included${m.value_without_hidden !== undefined ? ` · without them ${ovNum(m.value_without_hidden)}` : ''}</div>` : ''}
+                ${m.hidden_included ? `<div class="ov-flag">${ovEsc(m.hidden_included)} hidden included${m.value_without_hidden !== undefined ? ` · without them ${ovNum(m.value_without_hidden)}` : ''}</div>` : ''}
             </button>`).join('') || '<p class="ov-muted">No project selected.</p>';
         overviewMetrics.querySelectorAll('.ov-metric').forEach(b =>
             b.addEventListener('click', () => { overviewMetricKey = b.getAttribute('data-key'); renderOverview(); }));
@@ -1581,17 +1756,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderOverviewTab() {
         const d = overviewData;
         const tabs = {
-            posts: () => ovTable([
-                { key: 'shortcode', label: 'Post' }, { key: 'owner', label: 'Owner' },
-                { key: 'likes', label: 'Likes', numeric: true }, { key: 'comments', label: 'Comments', numeric: true },
-                { key: 'views', label: 'Views', numeric: true }, { key: 'posted_at', label: 'Posted' },
-                { key: 'is_hidden', label: 'Hidden' }, { key: 'deleted_at', label: 'Deleted' },
-            ], d.posts.map(p => ({ ...p, posted_at: ovDate(p.posted_at), is_hidden: p.is_hidden ? 'hidden' : '', deleted_at: ovDate(p.deleted_at) })), null, r => r.is_hidden || r.deleted_at),
-            creators: () => ovTable([
-                { key: 'username', label: 'Creator' }, { key: 'role', label: 'Role' },
-                { key: 'follower_count', label: 'Followers', numeric: true }, { key: 'posts', label: 'Posts', numeric: true },
-                { key: 'adds', label: 'Adds', numeric: true }, { key: 'scraped_at', label: 'Last seen' }, { key: 'observed_at', label: 'Observed' },
-            ], d.creators.map(c => ({ ...c, scraped_at: ovDate(c.scraped_at), observed_at: ovDate(c.observed_at) }))),
+            posts: () => ovPostsTab(d),
+            creators: () => ovCreatorsTab(),
             save_history: () => ovTable([
                 { key: 'at', label: 'When' }, { key: 'action', label: 'Action' }, { key: 'detail', label: 'Detail' }, { key: 'source', label: 'Source' },
             ], d.save_history.map(h => ({ ...h, at: ovDate(h.at) }))),
@@ -1600,6 +1766,43 @@ document.addEventListener('DOMContentLoaded', () => {
             ], d.sessions.map(s => ({ ...s, at: ovDate(s.at) }))) : '<p class="ov-muted" style="padding:10px">No session or device rows are available.</p>'),
         };
         overviewTabBody.innerHTML = (tabs[overviewTab] || tabs.posts)();
+        ovApplyBusy();
+    }
+
+    // Posts tab: a checkbox per row, the state of each link and a bulk bar for the ticked rows.
+    function ovPostsTab(d) {
+        if (!d.posts.length) return '<p class="ov-muted" style="padding:10px">No rows.</p>';
+        const n = overviewSelected.size;
+        const none = n === 0 ? ' disabled data-disabled-when-idle="1"' : '';
+        const allTicked = d.posts.every(p => overviewSelected.has(p.shortcode));
+        const bulk = ['hide', 'unhide', 'delete', 'restore'].map(a =>
+            `<button type="button" class="btn secondary-btn ov-bulk${a === 'delete' ? ' delete' : ''}" data-act="${a}"${none}>${OV_VERB[a]} selected</button>`).join('');
+        const rows = d.posts.map(p => {
+            const state = p.state || (p.deleted_at ? 'deleted' : p.is_hidden ? 'hidden' : 'visible');
+            return `<tr${state !== 'visible' ? ' class="ov-excluded"' : ''}>
+                <td><input type="checkbox" class="ov-pick" data-code="${ovEsc(p.shortcode)}" aria-label="Select ${ovEsc(p.shortcode)}"${overviewSelected.has(p.shortcode) ? ' checked' : ''}></td>
+                <td>${ovEsc(p.shortcode)}</td><td>${ovEsc(p.owner)}</td>
+                <td class="ov-num">${ovNum(p.likes)}</td><td class="ov-num">${ovNum(p.comments)}</td><td class="ov-num">${ovNum(p.views)}</td>
+                <td>${ovEsc(ovDate(p.posted_at))}</td>
+                <td class="ov-state-${ovEsc(state)}">${ovEsc(state)}</td></tr>`;
+        }).join('');
+        return `<div class="ov-bulk-bar">
+                <label><input type="checkbox" id="ov-select-all"${allTicked ? ' checked' : ''}> Select all on this page (${ovEsc(d.posts.length)})</label>
+                <span>${ovEsc(n)} selected</span>${bulk}</div>
+            <table class="ov-table"><thead><tr><th></th><th>Post</th><th>Owner</th><th class="ov-num">Likes</th><th class="ov-num">Comments</th><th class="ov-num">Views</th><th>Posted</th><th>State</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Creators tab: posts per creator in this project, split by state, with the per-creator actions.
+    function ovCreatorsTab() {
+        if (overviewCreators === null) return '<p class="ov-muted" style="padding:10px">Loading creators...</p>';
+        if (!overviewCreators.length) return '<p class="ov-muted" style="padding:10px">No rows.</p>';
+        const btn = (act, c, label, enabled, extra = '') =>
+            `<button type="button" class="btn secondary-btn ov-act${extra}" data-act="${act}" data-user="${ovEsc(c.username)}"${enabled ? '' : ' disabled data-disabled-when-idle="1"'}>${label}</button>`;
+        const rows = overviewCreators.map(c => `<tr>
+            <td>${ovEsc(c.username)}</td><td>${ovEsc(c.role)}</td>
+            <td class="ov-num">${ovNum(c.visible)}</td><td class="ov-num">${ovNum(c.hidden)}</td><td class="ov-num">${ovNum(c.deleted)}</td>
+            <td class="ov-actions-cell">${btn('hide', c, 'Hide', c.visible > 0)}${btn('unhide', c, 'Unhide', c.hidden > 0)}${btn('delete', c, 'Delete', c.visible + c.hidden > 0, ' delete')}${btn('restore', c, 'Restore', c.deleted > 0)}${btn('remove', c, 'Remove creator', true, ' delete')}</td></tr>`).join('');
+        return `<table class="ov-table"><thead><tr><th>Creator</th><th>Role</th><th class="ov-num">Visible</th><th class="ov-num">Hidden</th><th class="ov-num">Deleted</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
     overviewTabs.addEventListener('click', (e) => {

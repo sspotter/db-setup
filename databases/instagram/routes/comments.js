@@ -113,7 +113,7 @@ router.get('/comments', async (req, res) => {
             query = `SELECT c.* FROM comments c
                      JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode
                      JOIN projects proj ON ppo.project_id = proj.id
-                     WHERE ppo.project_id = $${paramIdx++} AND proj.user_id = $${paramIdx++}`;
+                     WHERE ppo.project_id = $${paramIdx++} AND proj.user_id = $${paramIdx++} AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`;
             params.push(project_id, req.user.id);
         } else {
             query = 'SELECT c.* FROM comments c JOIN user_scraped_posts up ON c.post_shortcode = up.post_shortcode WHERE up.user_id = $1';
@@ -144,7 +144,7 @@ router.get('/comments', async (req, res) => {
             countQuery = `SELECT COUNT(c.*) FROM comments c
                           JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode
                           JOIN projects proj ON ppo.project_id = proj.id
-                          WHERE ppo.project_id = $${cIdx++} AND proj.user_id = $${cIdx++}`;
+                          WHERE ppo.project_id = $${cIdx++} AND proj.user_id = $${cIdx++} AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`;
             countParams.push(project_id, req.user.id);
         } else {
             countQuery = 'SELECT COUNT(c.*) FROM comments c JOIN user_scraped_posts up ON c.post_shortcode = up.post_shortcode WHERE up.user_id = $1';
@@ -194,7 +194,7 @@ router.post('/comments/check', async (req, res) => {
                  FROM comments c
                  JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode
                  JOIN projects proj ON ppo.project_id = proj.id
-                 WHERE c.post_shortcode = ANY($1) AND ppo.project_id = $2 AND proj.user_id = $3
+                 WHERE c.post_shortcode = ANY($1) AND ppo.project_id = $2 AND proj.user_id = $3 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
                  GROUP BY c.post_shortcode`,
                 [shortcodes, project_id, req.user.id]
             );

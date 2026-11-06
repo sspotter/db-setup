@@ -23,16 +23,16 @@ async function getProjectReachAndStats(projectId) {
     const basicStatsResult = await pool.query(
         `SELECT
             (SELECT COUNT(*) FROM project_profiles WHERE project_id = $1) AS profile_count,
-            (SELECT COUNT(*) FROM project_posts WHERE project_id = $1) AS post_count,
+            (SELECT COUNT(*) FROM project_posts WHERE project_id = $1 AND is_hidden = false AND deleted_at IS NULL) AS post_count,
             (SELECT COUNT(c.*)
              FROM comments c
              JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode
-             WHERE ppo.project_id = $1
+             WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
             ) AS comment_count,
             (SELECT COUNT(DISTINCT sub.shortcode)
              FROM posts sub
              JOIN project_posts ppo ON sub.shortcode = ppo.post_shortcode
-             WHERE ppo.project_id = $1
+             WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
                AND (sub.is_paid = TRUE
                     OR EXISTS (SELECT 1 FROM post_relations pr WHERE pr.post_shortcode = sub.shortcode AND pr.relation_type = 'COAUTHOR'))
             ) AS collab_post_count`,
@@ -45,7 +45,7 @@ async function getProjectReachAndStats(projectId) {
             SELECT p.shortcode, p.owner_username
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-            WHERE ppo.project_id = $1
+            WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
         ),
         all_partners AS (
             SELECT owner_username AS username, shortcode AS post_shortcode
@@ -155,11 +155,11 @@ router.get('/projects', async (req, res) => {
         const result = await pool.query(
             `SELECT p.*,
                     (SELECT COUNT(*) FROM project_profiles pp WHERE pp.project_id = p.id) AS profile_count,
-                    (SELECT COUNT(*) FROM project_posts ppo WHERE ppo.project_id = p.id) AS post_count,
+                    (SELECT COUNT(*) FROM project_posts ppo WHERE ppo.project_id = p.id AND ppo.is_hidden = false AND ppo.deleted_at IS NULL) AS post_count,
                     (SELECT COUNT(DISTINCT sub.shortcode)
                      FROM posts sub
                      JOIN project_posts ppo2 ON sub.shortcode = ppo2.post_shortcode
-                     WHERE ppo2.project_id = p.id
+                     WHERE ppo2.project_id = p.id AND ppo2.is_hidden = false AND ppo2.deleted_at IS NULL
                        AND (sub.is_paid = TRUE
                             OR EXISTS (SELECT 1 FROM post_relations pr WHERE pr.post_shortcode = sub.shortcode AND pr.relation_type = 'COAUTHOR'))
                     ) AS collab_post_count
@@ -303,7 +303,7 @@ router.get('/projects/:id/profiles', async (req, res) => {
             `SELECT iu.*, pp.role AS project_role, pp.pinned, pp.added_at AS added_to_project,
                     (SELECT COUNT(*) FROM project_posts ppo
                      JOIN posts p ON ppo.post_shortcode = p.shortcode
-                     WHERE ppo.project_id = $1 AND p.owner_username = iu.username
+                     WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND p.owner_username = iu.username
                     ) AS post_count
              FROM project_profiles pp
              JOIN ig_users iu ON pp.username = iu.username
@@ -448,7 +448,7 @@ router.get('/projects/:id/posts', async (req, res) => {
                    ) AS latest_metrics
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-            WHERE ppo.project_id = $1
+            WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
         `;
         const params = [id];
         let paramIdx = 2;
@@ -459,7 +459,7 @@ router.get('/projects/:id/posts', async (req, res) => {
         }
 
         // Count query
-        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1`;
+        let countQuery = `SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`;
         const countParams = [id];
         let cIdx = 2;
         if (owner) {
@@ -560,7 +560,7 @@ router.get('/projects/:id/stats', async (req, res) => {
             `SELECT COUNT(DISTINCT pr.post_shortcode) AS collab_count
              FROM post_relations pr
              JOIN project_posts ppo ON pr.post_shortcode = ppo.post_shortcode
-             WHERE ppo.project_id = $1 AND pr.relation_type = 'COAUTHOR'`,
+             WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND pr.relation_type = 'COAUTHOR'`,
             [id]
         );
 
@@ -569,7 +569,7 @@ router.get('/projects/:id/stats', async (req, res) => {
             `SELECT COUNT(*) AS paid_count
              FROM posts p
              JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-             WHERE ppo.project_id = $1 AND p.is_paid = TRUE`,
+             WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND p.is_paid = TRUE`,
             [id]
         );
 
@@ -645,7 +645,7 @@ router.get('/projects/:id/compare', async (req, res) => {
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
                 JOIN all_appearances a ON p.shortcode = a.shortcode
-                WHERE ppo.project_id = $1
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
                   AND a.username = ANY($2)
                   ${dateFilter}
             )
@@ -688,7 +688,7 @@ router.get('/projects/:id/compare', async (req, res) => {
                 SELECT p.shortcode, p.owner_username
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
                   ${reachDateFilter}
             ),
             all_appearances AS (
@@ -793,7 +793,7 @@ router.get('/projects/:id/timeseries', async (req, res) => {
             FROM posts p
             JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
             JOIN all_appearances a ON p.shortcode = a.shortcode
-            WHERE ppo.project_id = $1
+            WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
               AND a.username = ANY($2)
               AND p.posted_at IS NOT NULL
               ${tsDateFilter}
@@ -898,7 +898,7 @@ router.get('/projects/:id/top-posts', async (req, res) => {
                 WHERE post_shortcode = p.shortcode
                 ORDER BY observed_at DESC NULLS LAST, captured_at DESC LIMIT 1
             ) h ON true
-            WHERE ppo.project_id = $1
+            WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
               AND a.username = ANY($2)
               ${tpDateFilter}
             ORDER BY a.username, p.shortcode, engagement DESC`,
@@ -974,7 +974,7 @@ router.get('/projects/:id/collaborations', async (req, res) => {
                 SELECT p.shortcode, p.owner_username
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
                   ${collabDateFilter}
             ),
             all_appearances AS (

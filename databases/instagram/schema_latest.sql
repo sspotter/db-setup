@@ -149,7 +149,10 @@ CREATE TABLE public.project_posts (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     project_id uuid NOT NULL,
     post_shortcode character varying(255) NOT NULL,
-    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    is_hidden boolean DEFAULT false NOT NULL,
+    hidden_at timestamp with time zone,
+    deleted_at timestamp with time zone
 );
 
 
@@ -465,6 +468,20 @@ CREATE INDEX idx_project_posts_post ON public.project_posts USING btree (post_sh
 --
 
 CREATE INDEX idx_project_posts_project ON public.project_posts USING btree (project_id);
+
+
+--
+-- Name: idx_project_posts_visible; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_project_posts_visible ON public.project_posts USING btree (project_id) WHERE ((is_hidden = false) AND (deleted_at IS NULL));
+
+
+--
+-- Name: idx_project_posts_hidden; Type: INDEX; Schema: public; Owner: devuser
+--
+
+CREATE INDEX idx_project_posts_hidden ON public.project_posts USING btree (project_id) WHERE (is_hidden = true);
 
 
 --

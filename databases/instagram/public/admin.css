@@ -1066,3 +1066,21 @@ td.ov-num, th.ov-num { text-align: right; font-variant-numeric: tabular-nums; }
 /* Overview modal: taller than the screen on a long metric list, so let it scroll instead of clipping the top. */
 #overview-modal { align-items: flex-start; overflow-y: auto; padding: 24px 12px; }
 #overview-modal .modal-content { margin: 0 auto; }
+
+/* Any modal taller than the screen scrolls instead of being clipped (long project lists, overview). */
+.modal-overlay { overflow-y: auto; padding: 24px 12px; }
+.modal-content { margin: auto; }
+
+/* Admin actions on a project's posts (overview modal). */
+#projects-list { max-height: 55vh; overflow-y: auto; }
+.ov-action { margin: 8px 0; padding: 12px; border-radius: 8px; border: 1px solid var(--accent-blue); background: var(--glass-bg); }
+.ov-action.hidden { display: none; }
+.ov-action-msg { font-weight: 600; margin-bottom: 6px; word-break: break-word; }
+.ov-action-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.ov-action-error { color: var(--danger); margin-top: 6px; font-size: 0.9em; word-break: break-word; }
+.ov-bulk { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; font-size: 0.9em; }
+.ov-small { padding: 3px 8px; font-size: 0.8em; margin-right: 4px; }
+.ov-state { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.8em; border: 1px solid var(--glass-border); }
+.ov-state-hidden { border-color: var(--warning); color: var(--warning); }
+.ov-state-deleted { border-color: var(--danger); color: var(--danger); }
+button:disabled.ov-act, button:disabled.ov-small { opacity: 0.5; cursor: not-allowed; }

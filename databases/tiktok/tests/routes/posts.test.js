@@ -237,3 +237,28 @@ describe('posts — per-project hide + soft delete', () => {
         });
     });
 });
+
+describe('POST /posts re-save into a project keeps hidden / deleted links as they are', () => {
+    let client;
+    const post = {
+        shortcode: '7657591518504439047', postUrl: 'https://www.tiktok.com/@nadine/video/7657591518504439047',
+        owner: { username: 'nadine', follower_count: 10 }, likes: 1, comments: 0, timestamp: 1790788541,
+    };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        client = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'x', is_insert: false }], rowCount: 1 }), release: jest.fn() };
+        pool.connect.mockResolvedValue(client);
+    });
+
+    it('links with ON CONFLICT DO NOTHING: no flag is written and no second link is created', async () => {
+        const res = await request(app).post('/api/posts').send({ project_id: PROJ, posts: [post] });
+        expect(res.status).toBe(200);
+        const linkSql = sqlOf(client).filter((s) => /project_posts/.test(s));
+        expect(linkSql).toHaveLength(1);
+        expect(linkSql[0]).toMatch(/INSERT INTO project_posts \(project_id, post_shortcode, added_at\)/);
+        expect(linkSql[0]).toMatch(/ON CONFLICT \(project_id, post_shortcode\) DO NOTHING/);
+        expect(linkSql[0]).not.toMatch(/is_hidden|hidden_at|deleted_at|DO UPDATE/);
+        expect(sqlOf(client).join('\n')).not.toMatch(/UPDATE project_posts/);
+    });
+});

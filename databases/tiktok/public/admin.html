@@ -426,7 +426,7 @@
         </div>
     </div>
 
-    <!-- User Overview Modal: read-only debug view of what a user sees in a project -->
+    <!-- User Overview Modal: what a user sees in a project, plus admin hide / delete of their scraped posts and creators -->
     <div id="overview-modal" class="modal-overlay hidden">
         <div class="modal-content glass-panel large-modal">
             <div class="modal-header">
@@ -441,6 +441,7 @@
                     </label>
                 </div>
                 <div id="overview-warnings"></div>
+                <div id="overview-confirm" class="ov-confirm hidden" role="alertdialog" aria-live="polite"></div>
                 <div class="ov-grid">
                     <div id="overview-metrics" class="ov-metrics"></div>
                     <div id="overview-breakdown" class="ov-breakdown"><p class="ov-muted">Click a number to see how it was built.</p></div>

@@ -5,9 +5,10 @@
  *
  * Shows what a user sees in one project: every number, the formula behind it and the rows that
  * feed it, so a wrong number can be traced to its source. The formulas MIRROR routes/projects.js
- * (/stats, /compare, /top-posts and the keyword summary) on purpose, including their known gaps
- * (they ignore project_posts.is_hidden and posts/project_posts.deleted_at). Those gaps are shown
- * as warnings with numbers instead of being "fixed" here, so the view matches what the app shows.
+ * (/stats, /compare, /top-posts and the keyword summary) on purpose, so every number here equals
+ * what the user's app shows. Like the app, all post totals exclude project_posts links that are
+ * hidden (is_hidden) or soft-deleted (deleted_at); the posts list keeps them, with a state, so an
+ * admin can unhide or restore them (see routes/adminProjectPosts.js).
  *
  * SELECT only. Never selects password hashes, tokens or secrets.
  */
@@ -37,8 +38,8 @@ const postsSql = (withHide) => `
     SELECT ppo.post_shortcode AS shortcode, p.shortcode AS post_row, p.owner_username, p.posted_at,
            p.post_url ILIKE '%instagram.com%' AS foreign_url, p.view_count AS post_view_count,
            ${withHide
-        ? 'ppo.is_hidden AS pp_hidden, ppo.deleted_at AS pp_deleted_at, p.deleted_at AS post_deleted_at,'
-        : 'false AS pp_hidden, NULL::timestamptz AS pp_deleted_at, NULL::timestamptz AS post_deleted_at,'}
+        ? 'ppo.is_hidden AS pp_hidden, ppo.deleted_at AS pp_deleted_at,'
+        : 'false AS pp_hidden, NULL::timestamptz AS pp_deleted_at,'}
            COALESCE(h.likes_count, 0) AS likes, COALESCE(h.comments_count, 0) AS comments,
            COALESCE(h.video_view_count, 0) AS views, COALESCE(h.repost_count, 0) AS reposts,
            COALESCE(h.share_count, 0) AS shares, COALESCE(h.bookmark_count, 0) AS bookmarks
@@ -52,14 +53,15 @@ const postsSql = (withHide) => `
     WHERE ppo.project_id = $1`;
 
 // Same CTEs as getProjectReachAndStats() in routes/projects.js, plus scraped_at and adds.
-// excludeHidden=true is the "what it would be without hidden/deleted posts" variant.
+// Hidden and soft-deleted project links are excluded, as in the app (skipped only while the
+// project_posts hide columns do not exist yet).
 const creatorsSql = (excludeHidden) => `
     WITH project_posts_cte AS (
         SELECT p.shortcode, p.owner_username
         FROM posts p
         JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
         WHERE ppo.project_id = $1
-        ${excludeHidden ? 'AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND p.deleted_at IS NULL' : ''}
+        ${excludeHidden ? 'AND ppo.is_hidden = false AND ppo.deleted_at IS NULL' : ''}
     ),
     all_partners AS (
         SELECT owner_username AS username, shortcode AS post_shortcode FROM project_posts_cte
@@ -78,7 +80,8 @@ const creatorsSql = (excludeHidden) => `
            MAX(iu.scraped_at) AS scraped_at,
            COALESCE(pp.role, 'collaborator') AS role,
            (SELECT COUNT(*) FROM project_posts ppo2 JOIN posts p2 ON p2.shortcode = ppo2.post_shortcode
-             WHERE ppo2.project_id = $1 AND p2.owner_username = ps.username) AS adds
+             WHERE ppo2.project_id = $1 AND p2.owner_username = ps.username
+               ${excludeHidden ? 'AND ppo2.is_hidden = false AND ppo2.deleted_at IS NULL' : ''}) AS adds
     FROM partner_stats ps
     LEFT JOIN ig_users iu ON ps.username = iu.username
     LEFT JOIN project_profiles pp ON ps.username = pp.username AND pp.project_id = $1
@@ -110,11 +113,12 @@ const KEYWORD_ROWS_SQL = `
     GROUP BY sk.keyword
     ORDER BY reach_views DESC`;
 
-const COMMENT_ROWS_SQL = `
+const commentRowsSql = (excludeHidden) => `
     SELECT ppo.post_shortcode AS shortcode, COUNT(c.id) AS stored
     FROM comments c
     JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode
     WHERE ppo.project_id = $1
+    ${excludeHidden ? 'AND ppo.is_hidden = false AND ppo.deleted_at IS NULL' : ''}
     GROUP BY ppo.post_shortcode
     ORDER BY stored DESC`;
 
@@ -136,14 +140,15 @@ function normalizePost(r) {
         reposts: num(r.reposts), shares: num(r.shares), bookmarks: num(r.bookmarks),
         post_view_count: num(r.post_view_count),
         hidden: r.pp_hidden === true,
-        deleted: !!(r.pp_deleted_at || r.post_deleted_at),
-        deleted_at: iso(r.pp_deleted_at || r.post_deleted_at),
+        deleted: !!r.pp_deleted_at,
+        deleted_at: iso(r.pp_deleted_at),
         orphan: !r.post_row,
         foreign_url: r.foreign_url === true,
     };
 }
 
 const isExcluded = (p) => p.hidden || p.deleted;
+const postState = (p) => (p.deleted ? 'deleted' : p.hidden ? 'hidden' : 'visible');
 const sum = (rows, f) => rows.reduce((s, r) => s + (typeof f === 'function' ? f(r) : r[f]), 0);
 
 // Breakdown with one row per post for a single counter column.
@@ -195,7 +200,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         // ---- projects ---------------------------------------------------------------
         const projectsResult = await pool.query(
             `SELECT pr.id, pr.name, pr.created_at,
-                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id)::int AS posts,
+                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id AND pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS posts,
                     (SELECT count(*) FROM project_profiles pf WHERE pf.project_id = pr.id)::int AS profiles
              FROM projects pr
              WHERE pr.user_id = $1
@@ -352,24 +357,24 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
             warn('warn', 'hide_columns_missing',
                 'project_posts.is_hidden / deleted_at or posts.deleted_at do not exist (apply migrations/v6_project_post_hide.sql): no post can be hidden or deleted here.');
         }
-        const allPosts = postsResult.rows.map(normalizePost);
-        const excluded = allPosts.filter(isExcluded);
+        const listedPosts = postsResult.rows.map(normalizePost); // every link, for the posts tab
+        const excluded = listedPosts.filter(isExcluded);
+        const allPosts = listedPosts.filter((p) => !isExcluded(p)); // what every total below counts
 
-        const [creatorsRes, creatorsCleanRes, kwSummaryRes, kwRowsRes, commentRowsRes] = await Promise.all([
-            pool.query(creatorsSql(false), [selected.id]),
-            hideColumns && excluded.length ? pool.query(creatorsSql(true), [selected.id]) : Promise.resolve(null),
+        const [creatorsRes, kwSummaryRes, kwRowsRes, commentRowsRes] = await Promise.all([
+            pool.query(creatorsSql(hideColumns), [selected.id]),
             optional('search_keywords / tiktok_videos', () => pool.query(KEYWORD_SUMMARY_SQL, [selected.id])),
             optional('tiktok_videos', () => pool.query(KEYWORD_ROWS_SQL, [selected.id])),
-            optional('comments', () => pool.query(COMMENT_ROWS_SQL, [selected.id])),
+            optional('comments', () => pool.query(commentRowsSql(hideColumns), [selected.id])),
         ]);
 
         // ---- posts tab ----------------------------------------------------------------
-        body.posts = [...allPosts]
+        body.posts = [...listedPosts]
             .sort((a, b) => (b.posted_at ? 1 : 0) - (a.posted_at ? 1 : 0) || String(b.posted_at).localeCompare(String(a.posted_at)))
             .slice(0, POSTS_SHOWN)
             .map((p) => ({
                 shortcode: p.shortcode, owner: p.owner, likes: p.likes, comments: p.comments, views: p.views,
-                posted_at: p.posted_at, is_hidden: p.hidden, deleted_at: p.deleted_at,
+                posted_at: p.posted_at, is_hidden: p.hidden, deleted_at: p.deleted_at, state: postState(p),
             }));
 
         // ---- creators -----------------------------------------------------------------
@@ -381,13 +386,13 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         }));
         body.creators = creators;
         const reach = sum(creators, (c) => c.follower_count * c.posts);
-        const reachClean = creatorsCleanRes
-            ? sum(creatorsCleanRes.rows, (r) => num(r.follower_count) * num(r.posts_involved))
-            : reach;
 
         // ---- metrics ------------------------------------------------------------------
         const B = body.breakdowns;
-        const HIDE_NOTE = ' The app ignores project_posts.is_hidden and deleted_at here, so hidden/deleted posts are included.';
+        const HIDE_NOTE = ' Hidden and soft-deleted project links (is_hidden / deleted_at) are excluded, as in the app.';
+        if (excluded.length > 0) {
+            warn('info', 'hidden_excluded', `${excluded.length} hidden/deleted posts are excluded from the totals (the user's app excludes them too).`);
+        }
         const N = allPosts.length;
         const likes = sum(allPosts, 'likes');
         const comments = sum(allPosts, 'comments');
@@ -400,36 +405,26 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
 
         const counterMetric = (key, label, field, histColumn, breakdownKey, note) => {
             const value = sum(allPosts, field);
-            const hiddenSum = sum(excluded, field);
             B[breakdownKey] = perPostBreakdown(label, `Per post: ${histColumn} of ${LATEST}, as /compare and /top-posts read it.${HIDE_NOTE}${note || ''}`, field, label, allPosts);
             metric(key, label, value,
                 `SUM(post_metrics_history.${histColumn}) over every project_posts row of the project, latest history row per post`,
                 [`post_metrics_history.${histColumn}`, 'post_metrics_history.captured_at', 'project_posts.post_shortcode'],
-                breakdownKey, { hidden_included: excluded.length, value_without_hidden: value - hiddenSum });
-            if (excluded.length > 0 && hiddenSum > 0) {
-                warn('warn', `hidden_counted_${key}`,
-                    `${excluded.length} hidden/deleted post(s) are counted in ${label} (${hiddenSum} of ${value}); the app does not filter them here.`);
-            }
+                breakdownKey);
         };
 
         // Posts
         B.posts = {
             title: 'Posts',
-            explain: `stats.posts = COUNT(*) FROM project_posts WHERE project_id = this project (the same number admin post_count shows). The posts listing (routes/projects.js, GET /projects/:id/posts) additionally filters is_hidden = false AND deleted_at IS NULL, so it can show fewer.`,
+            explain: `stats.posts = COUNT(*) FROM project_posts WHERE project_id = this project AND is_hidden = false AND deleted_at IS NULL (the same number admin post_count and the app's posts listing show).`,
             columns: [
                 { key: 'shortcode', label: 'Post', numeric: false }, { key: 'owner', label: 'Owner', numeric: false },
                 { key: 'posted_at', label: 'Posted', numeric: false }, { key: 'state', label: 'State', numeric: false },
             ],
             rows: allPosts.slice(0, BREAKDOWN_ROWS).map((p) => ({ shortcode: p.shortcode, owner: p.owner, posted_at: p.posted_at, state: stateOf(p) })),
-            total: { shortcode: `Total (${N} posts; ${N - excluded.length} visible in the app's posts listing)`, owner: null, posted_at: null, state: null },
+            total: { shortcode: `Total (${N} posts)`, owner: null, posted_at: null, state: null },
         };
-        metric('posts', 'Posts', N, 'COUNT(*) FROM project_posts WHERE project_id = :project (as /stats and admin post_count)',
-            ['project_posts.project_id', 'project_posts.post_shortcode'], 'posts',
-            { hidden_included: excluded.length, value_without_hidden: N - excluded.length });
-        if (excluded.length > 0) {
-            warn('warn', 'hidden_counted_posts',
-                `${excluded.length} hidden/deleted post(s) are counted in Posts: /stats and admin post_count say ${N}, the app's posts listing shows ${N - excluded.length}.`);
-        }
+        metric('posts', 'Posts', N, 'COUNT(*) FROM project_posts WHERE project_id = :project AND is_hidden = false AND deleted_at IS NULL (as /stats and admin post_count)',
+            ['project_posts.project_id', 'project_posts.post_shortcode', 'project_posts.is_hidden', 'project_posts.deleted_at'], 'posts');
 
         counterMetric('likes', 'Likes', 'likes', 'likes_count', 'likes');
         counterMetric('comments', 'Comments', 'comments', 'comments_count', 'comments');
@@ -447,7 +442,6 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         }
 
         // Engagement and Avg EPM
-        const hiddenEng = sum(excluded, (p) => p.likes + p.comments);
         B.engagement = {
             title: 'Total Engagement',
             explain: `Per post: likes + comments from ${LATEST}.${HIDE_NOTE}`,
@@ -461,14 +455,8 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
             total: { shortcode: `Total (${N} posts)`, owner: null, likes, comments, engagement, state: null },
         };
         metric('engagement', 'Total Engagement', engagement, 'SUM(likes) + SUM(comments) (as /compare total_engagement)',
-            ['post_metrics_history.likes_count', 'post_metrics_history.comments_count'], 'engagement',
-            { hidden_included: excluded.length, value_without_hidden: engagement - hiddenEng });
-        if (excluded.length > 0 && hiddenEng > 0) {
-            warn('warn', 'hidden_counted_engagement',
-                `${excluded.length} hidden/deleted post(s) are counted in Total Engagement (${hiddenEng} of ${engagement}).`);
-        }
+            ['post_metrics_history.likes_count', 'post_metrics_history.comments_count'], 'engagement');
 
-        const avgClean = N - excluded.length > 0 ? Math.round(((engagement - hiddenEng) / (N - excluded.length)) * 10) / 10 : 0;
         B.epm = {
             title: 'Avg EPM',
             explain: 'The server computes avg_engagement = ROUND((SUM(likes) + SUM(comments)) / COUNT(DISTINCT posts), 1) (/compare). The dashboard labels it EPM (engagement per post).',
@@ -477,12 +465,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
             total: { part: 'Avg EPM = Total Engagement / Posts', value: avgEpm },
         };
         metric('avg_epm', 'Avg EPM', avgEpm, 'ROUND((SUM(likes) + SUM(comments)) / COUNT(DISTINCT shortcode), 1), 0 when there are no posts',
-            ['post_metrics_history.likes_count', 'post_metrics_history.comments_count', 'project_posts.post_shortcode'], 'epm',
-            { hidden_included: excluded.length, value_without_hidden: avgClean });
-        if (excluded.length > 0) {
-            warn('warn', 'hidden_counted_avg_epm',
-                `Avg EPM includes ${excluded.length} hidden/deleted post(s): ${avgEpm} as shown, ${avgClean} without them.`);
-        }
+            ['post_metrics_history.likes_count', 'post_metrics_history.comments_count', 'project_posts.post_shortcode'], 'epm');
 
         // Potential Impressions (reach by creator)
         B.reach = {
@@ -503,11 +486,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         metric('potential_impressions', 'Potential Impressions', reach,
             'SUM over creators of ig_users.follower_count x COUNT(DISTINCT project posts they own, co-author or are caption_user on) (as /stats reach)',
             ['ig_users.follower_count', 'posts.owner_username', 'post_relations.username', 'post_relations.relation_type', 'project_posts.post_shortcode'],
-            'reach', { hidden_included: excluded.length, value_without_hidden: reachClean });
-        if (excluded.length > 0 && reach !== reachClean) {
-            warn('warn', 'hidden_counted_potential_impressions',
-                `${excluded.length} hidden/deleted post(s) are counted in Potential Impressions (${reach} as shown, ${reachClean} without them).`);
-        }
+            'reach');
 
         // Comments stored
         if (commentRowsRes) {
@@ -569,7 +548,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         if (orphans.length > 0) {
             warn('warn', 'orphan_project_posts', `${orphans.length} project_posts row(s) point at a post that no longer exists (they still count in Posts, with 0 metrics).`);
         }
-        const foreign = allPosts.filter((p) => p.foreign_url);
+        const foreign = listedPosts.filter((p) => p.foreign_url);
         if (foreign.length > 0) {
             warn('bad', 'instagram_posts_in_tiktok_db',
                 `${foreign.length} post(s) of this project have an instagram.com post_url: Instagram data reached the TikTok database (first: ${foreign.slice(0, 3).map((p) => p.shortcode).join(', ')}).`);

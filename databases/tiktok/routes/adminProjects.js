@@ -25,7 +25,7 @@ router.get('/users/:userId/projects', verifyAdmin, async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT pr.id, pr.name, pr.created_at,
-                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id)::int AS post_count,
+                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id AND pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS post_count,
                     (SELECT count(*) FROM project_profiles pf WHERE pf.project_id = pr.id)::int AS profile_count
              FROM projects pr
              WHERE pr.user_id = $1

@@ -41,6 +41,16 @@ async function optional(sql, params) {
     }
 }
 
+// Columns of one project post row. Callers append the visibility filter, ORDER BY and LIMIT.
+const POST_SELECT = `SELECT p.shortcode, p.owner_username, p.posted_at, p.is_paid, p.type, p.collective_reach,
+                    ppo.is_hidden, ppo.deleted_at,
+                    ${LATEST('likes_count')} AS likes, ${LATEST('comments_count')} AS comments,
+                    ${LATEST('observed_at')} AS metrics_observed_at,
+                    EXISTS (SELECT 1 FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode) AS has_metrics,
+                    (SELECT COUNT(*) FROM post_relations r WHERE r.post_shortcode = p.shortcode AND r.relation_type = 'COAUTHOR')::int AS coauthors
+             FROM project_posts ppo JOIN posts p ON p.shortcode = ppo.post_shortcode
+             WHERE ppo.project_id = $1`;
+
 const iso = (v) => (v ? new Date(v).toISOString() : null);
 
 const BROWSER_ONLY = [
@@ -73,7 +83,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
 
         const projRes = await pool.query(
             `SELECT pr.id, pr.name, pr.created_at,
-                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id)::int AS posts,
+                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id AND pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS posts,
                     (SELECT count(*) FROM project_profiles pf WHERE pf.project_id = pr.id)::int AS profiles
              FROM projects pr WHERE pr.user_id = $1
              ORDER BY pr.updated_at DESC NULLS LAST, pr.created_at DESC`, [userId]);
@@ -170,7 +180,7 @@ async function loadGuardEvents(userId) {
 async function fillProject(body, projectId) {
     const q = (sql) => pool.query(sql, [projectId]);
 
-    const [totalsRes, collabRes, commentsRes, creatorsRes, postsRes] = await Promise.all([
+    const [totalsRes, collabRes, commentsRes, creatorsRes, postsRes, offRes, offCountRes] = await Promise.all([
         q(`SELECT count(*) AS posts,
                   COALESCE(sum(m.likes), 0) AS likes, COALESCE(sum(m.comments), 0) AS comments,
                   count(*) FILTER (WHERE NOT m.has_metrics) AS no_metrics
@@ -180,20 +190,20 @@ async function fillProject(body, projectId) {
                 COALESCE(${LATEST('likes_count')}, 0) AS likes,
                 COALESCE(${LATEST('comments_count')}, 0) AS comments,
                 EXISTS (SELECT 1 FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode) AS has_metrics) m
-           WHERE ppo.project_id = $1`),
+           WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`),
         q(`SELECT
               (SELECT COUNT(DISTINCT sub.shortcode) FROM posts sub JOIN project_posts ppo ON sub.shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1 AND (sub.is_paid = TRUE
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND (sub.is_paid = TRUE
                    OR EXISTS (SELECT 1 FROM post_relations pr WHERE pr.post_shortcode = sub.shortcode AND pr.relation_type = 'COAUTHOR'))) AS collab_posts,
               (SELECT COUNT(DISTINCT pr.post_shortcode) FROM post_relations pr JOIN project_posts ppo ON pr.post_shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1 AND pr.relation_type = 'COAUTHOR') AS collaborations,
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND pr.relation_type = 'COAUTHOR') AS collaborations,
               (SELECT COUNT(*) FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1 AND p.is_paid = TRUE) AS paid`),
-        optional('SELECT COUNT(c.*) AS n FROM comments c JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode WHERE ppo.project_id = $1', [projectId]),
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL AND p.is_paid = TRUE) AS paid`),
+        optional('SELECT COUNT(c.*) AS n FROM comments c JOIN project_posts ppo ON c.post_shortcode = ppo.post_shortcode WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL', [projectId]),
         // Same CTEs as getProjectReachAndStats, plus the follower provenance columns.
         q(`WITH project_posts_cte AS (
                 SELECT p.shortcode, p.owner_username FROM posts p JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
-                WHERE ppo.project_id = $1
+                WHERE ppo.project_id = $1 AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
            ),
            all_partners AS (
                 SELECT owner_username AS username, shortcode AS post_shortcode, 'OWNER' AS how FROM project_posts_cte
@@ -217,16 +227,16 @@ async function fillProject(body, projectId) {
            LEFT JOIN project_profiles pp ON ps.username = pp.username AND pp.project_id = $1
            GROUP BY ps.username, ps.posts_involved, ps.adds, pp.role
            ORDER BY potential_impressions DESC, ps.username`),
-        pool.query(
-            `SELECT p.shortcode, p.owner_username, p.posted_at, p.is_paid, p.type, p.collective_reach,
-                    ${LATEST('likes_count')} AS likes, ${LATEST('comments_count')} AS comments,
-                    ${LATEST('observed_at')} AS metrics_observed_at,
-                    EXISTS (SELECT 1 FROM post_metrics_history h WHERE h.post_shortcode = p.shortcode) AS has_metrics,
-                    (SELECT COUNT(*) FROM post_relations r WHERE r.post_shortcode = p.shortcode AND r.relation_type = 'COAUTHOR')::int AS coauthors
-             FROM project_posts ppo JOIN posts p ON p.shortcode = ppo.post_shortcode
-             WHERE ppo.project_id = $1
+        pool.query(`${POST_SELECT} AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
              ORDER BY p.posted_at DESC NULLS LAST, p.shortcode
              LIMIT ${POST_LIMIT}`, [projectId]),
+        // Hidden and soft-deleted links: not in any number above, listed so an admin can restore them.
+        pool.query(`${POST_SELECT} AND NOT (ppo.is_hidden = false AND ppo.deleted_at IS NULL)
+             ORDER BY p.posted_at DESC NULLS LAST, p.shortcode
+             LIMIT ${POST_LIMIT}`, [projectId]),
+        q(`SELECT count(*) FILTER (WHERE ppo.deleted_at IS NULL AND ppo.is_hidden) AS hidden_n,
+                  count(*) FILTER (WHERE ppo.deleted_at IS NOT NULL) AS deleted_n
+           FROM project_posts ppo WHERE ppo.project_id = $1`),
     ]);
 
     const t = totalsRes.rows[0] || {};
@@ -243,18 +253,25 @@ async function fillProject(body, projectId) {
     const reach = creators.reduce((s, r) => s + r.follower_count * r.posts, 0);
 
     body.creators = creators;
-    body.posts = postsRes.rows.map((r) => ({
+    const mapPost = (r) => ({
         shortcode: r.shortcode, owner: r.owner_username,
         likes: r.has_metrics ? num(r.likes) : 0, comments: r.has_metrics ? num(r.comments) : 0,
         posted_at: iso(r.posted_at), is_paid: r.is_paid === true, type: r.type,
         collective_reach: num(r.collective_reach),
         has_metrics: !!r.has_metrics, metrics_observed_at: iso(r.metrics_observed_at), coauthors: num(r.coauthors),
-    }));
-    const trunc = posts > body.posts.length
+        state: r.deleted_at ? 'deleted' : (r.is_hidden ? 'hidden' : 'visible'),
+    });
+    // Breakdowns below describe the visible posts only (what the user's app counts).
+    const visiblePosts = postsRes.rows.map(mapPost);
+    const offPosts = offRes.rows.map(mapPost);
+    body.posts = [...visiblePosts, ...offPosts];
+    const off = offCountRes.rows[0] || {};
+    body.hidden_summary = { hidden: num(off.hidden_n), deleted: num(off.deleted_n) };
+    const trunc = posts > visiblePosts.length
         ? ` Only the newest ${POST_LIMIT} of ${posts} posts are listed; the total is over all posts.` : '';
 
     const col = (key, label, numeric = false) => ({ key, label, numeric });
-    const metricRows = body.posts.map((p) => ({
+    const metricRows = visiblePosts.map((p) => ({
         shortcode: p.shortcode, owner: p.owner, likes: p.likes, comments: p.comments,
         engagement: p.likes + p.comments,
         metrics_observed_at: p.has_metrics ? p.metrics_observed_at : 'NO METRICS ROW',
@@ -264,9 +281,9 @@ async function fillProject(body, projectId) {
     const collabCols = [...base, col('is_paid', 'Paid'), col('coauthors', 'COAUTHOR relations', true)];
     const B = body.breakdowns;
     B.posts = {
-        title: 'Posts in this project', explain: 'Rows of project_posts for this project (newest first).' + trunc,
+        title: 'Posts in this project', explain: 'Visible rows of project_posts for this project (newest first); hidden and deleted links are not counted.' + trunc,
         columns: [...base, col('posted_at', 'Posted at')],
-        rows: body.posts.map((p) => ({ shortcode: p.shortcode, owner: p.owner, posted_at: p.posted_at })),
+        rows: visiblePosts.map((p) => ({ shortcode: p.shortcode, owner: p.owner, posted_at: p.posted_at })),
         total: { shortcode: 'Count (all posts)', posted_at: String(posts) },
     };
     B.total_likes = {
@@ -306,17 +323,17 @@ async function fillProject(body, projectId) {
     };
     B.collab_posts = {
         title: 'Collab posts', explain: 'Distinct project posts that are paid (posts.is_paid) OR have a COAUTHOR row in post_relations.' + trunc,
-        columns: collabCols, rows: body.posts.filter((p) => p.is_paid || p.coauthors > 0).map(collabRow),
+        columns: collabCols, rows: visiblePosts.filter((p) => p.is_paid || p.coauthors > 0).map(collabRow),
         total: { shortcode: 'Count (all posts)', coauthors: num(c.collab_posts) },
     };
     B.collaborations = {
         title: 'Collaborations', explain: 'Distinct project posts with at least one COAUTHOR row in post_relations (paid-only posts are not counted here).' + trunc,
-        columns: collabCols, rows: body.posts.filter((p) => p.coauthors > 0).map(collabRow),
+        columns: collabCols, rows: visiblePosts.filter((p) => p.coauthors > 0).map(collabRow),
         total: { shortcode: 'Count (all posts)', coauthors: num(c.collaborations) },
     };
     B.paid = {
         title: 'Paid partnerships', explain: 'Project posts with posts.is_paid = TRUE.' + trunc,
-        columns: collabCols, rows: body.posts.filter((p) => p.is_paid).map(collabRow),
+        columns: collabCols, rows: visiblePosts.filter((p) => p.is_paid).map(collabRow),
         total: { shortcode: 'Count (all posts)', coauthors: num(c.paid) },
     };
 
@@ -345,6 +362,9 @@ async function fillProject(body, projectId) {
         if (r.follower_count === 0) {
             w.push({ severity: 'info', code: 'FOLLOWERS_ZERO', message: `${r.username}: no follower_count (0), so it adds nothing to Potential Impressions.` });
         }
+    }
+    if (body.hidden_summary.hidden + body.hidden_summary.deleted > 0) {
+        w.push({ severity: 'info', code: 'POSTS_HIDDEN_DELETED', message: `${body.hidden_summary.hidden} hidden and ${body.hidden_summary.deleted} deleted post link(s) in this project are excluded from every number here and from the user's app (shown in the Posts tab with their state).` });
     }
     if (noMetrics > 0) {
         w.push({ severity: 'warn', code: 'POSTS_NO_METRICS', message: `${noMetrics} of ${posts} posts have no post_metrics_history row; they count as 0 likes and 0 comments.` });

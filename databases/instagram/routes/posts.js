@@ -235,15 +235,24 @@ router.post('/posts', platformGuard, async (req, res) => {
 
             // --- 5. Link post + owner to project ---
             if (projectId) {
+                // An existing link is left exactly as it is (DO NOTHING): a link an admin hid or
+                // soft-deleted stays hidden/deleted when the user saves the same post again, and no
+                // duplicate row is created (UNIQUE project_id + post_shortcode).
                 await client.query(
                     `INSERT INTO project_posts (project_id, post_shortcode, added_at)
                      VALUES ($1, $2, NOW())
                      ON CONFLICT (project_id, post_shortcode) DO NOTHING`,
                     [projectId, post.shortcode]
                 );
+                const linkState = await client.query(
+                    'SELECT deleted_at FROM project_posts WHERE project_id = $1 AND post_shortcode = $2',
+                    [projectId, post.shortcode]
+                );
+                // A deleted link must not bring its creator profiles back into the project.
+                const linkDeleted = linkState.rows.length > 0 && linkState.rows[0].deleted_at !== null && linkState.rows[0].deleted_at !== undefined;
 
                 // Also link owner profile to project
-                if (ownerUsername) {
+                if (ownerUsername && !linkDeleted) {
                     await client.query(
                         `INSERT INTO project_profiles (project_id, username)
                          VALUES ($1, $2)
@@ -254,7 +263,7 @@ router.post('/posts', platformGuard, async (req, res) => {
 
                 // Link collaborator profiles to project
                 for (const rel of relations) {
-                    if (rel.type === 'COAUTHOR') {
+                    if (rel.type === 'COAUTHOR' && !linkDeleted) {
                         await client.query(
                             `INSERT INTO project_profiles (project_id, username)
                              VALUES ($1, $2)
@@ -333,7 +342,7 @@ router.get('/posts', async (req, res) => {
                 FROM posts p
                 JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
                 JOIN projects proj ON ppo.project_id = proj.id
-                WHERE ppo.project_id = $${paramIdx++} AND proj.user_id = $${paramIdx++}
+                WHERE ppo.project_id = $${paramIdx++} AND proj.user_id = $${paramIdx++} AND ppo.is_hidden = false AND ppo.deleted_at IS NULL
             `;
             params.push(project_id, req.user.id);
         } else {
@@ -377,7 +386,7 @@ router.get('/posts', async (req, res) => {
             countQuery = `SELECT COUNT(*) FROM posts p
                           JOIN project_posts ppo ON p.shortcode = ppo.post_shortcode
                           JOIN projects proj ON ppo.project_id = proj.id
-                          WHERE ppo.project_id = $${cIdx++} AND proj.user_id = $${cIdx++}`;
+                          WHERE ppo.project_id = $${cIdx++} AND proj.user_id = $${cIdx++} AND ppo.is_hidden = false AND ppo.deleted_at IS NULL`;
             countParams.push(project_id, req.user.id);
         } else {
             countQuery = 'SELECT COUNT(*) FROM posts p JOIN user_scraped_posts up ON p.shortcode = up.post_shortcode WHERE up.user_id = $1';

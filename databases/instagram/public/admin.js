@@ -1682,7 +1682,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await adminGet(`/api/admin/users/${encodeURIComponent(ovUser.id)}/overview${q}`);
             if (mine !== ovRequest) return;
             ovData = data;
+            ovCreators = null;
+            ovSelected.clear();
+            ovHideConfirm();
             renderOverview();
+            if (data.selected_project_id) ovLoadCreators(data.selected_project_id, mine);
         } catch (err) {
             if (mine !== ovRequest) return;
             ovEls.error.textContent = err.message;
@@ -1732,9 +1736,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const c = (key, label, numeric = false) => ({ key, label, numeric });
         let html = '';
         if (ovTab === 'posts') {
-            html = ovTable([c('shortcode', 'Post'), c('owner', 'Owner'), c('likes', 'Likes', true), c('comments', 'Comments', true), c('posted_at', 'Posted'), c('is_paid', 'Paid'), c('type', 'Type'), c('collective_reach', 'Collective reach', true), c('has_metrics', 'Has metrics')], d.posts, null);
+            html = ovPostsHtml(d);
         } else if (ovTab === 'creators') {
-            html = ovTable([c('username', 'Creator'), c('role', 'Role'), c('follower_count', 'Followers', true), c('posts', 'Posts', true), c('adds', 'Adds', true), c('scraped_at', 'scraped_at'), c('observed_at', 'observed_at')], d.creators, null);
+            html = ovCreatorsHtml(d);
         } else if (ovTab === 'history') {
             html = ovTable([c('at', 'When'), c('source', 'Source'), c('action', 'Action'), c('detail', 'Detail')], d.save_history, null);
         } else {
@@ -1742,6 +1746,248 @@ document.addEventListener('DOMContentLoaded', () => {
                 ovTable([c('at', 'When'), c('kind', 'Kind'), c('ip', 'IP'), c('user_agent', 'User agent'), c('ext_version', 'Extension')], d.sessions, null);
         }
         ovEls.tabBody.innerHTML = html;
+        ovWireTab();
+        ovSetBusy(ovBusy);
+    }
+
+    // ---- Admin actions on one project's posts: hide / unhide / delete / restore / remove creator ----
+    // Every action is previewed (dry_run) first, confirmed, then sent with expect_count.
+    const ovActionBox = document.getElementById('overview-action');
+    const ovSelected = new Set();
+    let ovBusy = false;
+    let ovCreators = null; // null = loading, { rows } or { error }
+    const OV_VERBS = {
+        hide: { verb: 'Hide', past: 'Hid' }, unhide: { verb: 'Unhide', past: 'Unhid' },
+        delete: { verb: 'Delete', past: 'Deleted' }, restore: { verb: 'Restore', past: 'Restored' },
+    };
+
+    function ovProjectName() {
+        const p = ovData && ovData.projects.find(x => x.id === ovData.selected_project_id);
+        return p ? p.name : '';
+    }
+
+    // Disables every action button while a request runs; buttons with nothing to act on stay disabled.
+    function ovSetBusy(on) {
+        ovBusy = on;
+        ovModal.querySelectorAll('.ov-act').forEach(b => { b.disabled = on || b.getAttribute('data-zero') === '1'; });
+    }
+
+    function ovUpdateBulk() {
+        const n = ovSelected.size;
+        const label = document.getElementById('ov-sel-count');
+        if (label) label.textContent = `${n} selected`;
+        ovEls.tabBody.querySelectorAll('.ov-bulk-btn').forEach(b => b.setAttribute('data-zero', n === 0 ? '1' : '0'));
+        ovSetBusy(ovBusy);
+    }
+
+    function ovPostsHtml(d) {
+        const c = (key, label, numeric = false) => ({ key, label, numeric });
+        const s = d.hidden_summary || { hidden: 0, deleted: 0 };
+        const cols = [c('shortcode', 'Post'), c('owner', 'Owner'), c('likes', 'Likes', true), c('comments', 'Comments', true), c('posted_at', 'Posted'), c('is_paid', 'Paid'), c('type', 'Type'), c('collective_reach', 'Collective reach', true), c('has_metrics', 'Has metrics')];
+        if (!d.posts.length) return '<p class="ov-muted">No rows.</p>';
+        const bulk = Object.keys(OV_VERBS).map(a => `<button type="button" class="btn btn-secondary ov-small ov-act ov-bulk-btn" data-bulk="${esc(a)}" data-zero="${ovSelected.size ? '0' : '1'}">${esc(OV_VERBS[a].verb)} selected</button>`).join('');
+        const head = '<th></th><th>State</th>' + cols.map(x => `<th${x.numeric ? ' class="ov-num"' : ''}>${esc(x.label)}</th>`).join('');
+        const rows = d.posts.map(p => {
+            const state = p.state || 'visible';
+            const checked = ovSelected.has(p.shortcode) ? ' checked' : '';
+            return `<tr><td><input type="checkbox" class="ov-pick" data-sc="${esc(p.shortcode)}"${checked} aria-label="Select post ${esc(p.shortcode)}"></td>` +
+                `<td><span class="ov-state ov-state-${esc(state)}">${esc(state)}</span></td>` +
+                cols.map(x => `<td${x.numeric ? ' class="ov-num"' : ''}>${esc(ovFmt(p[x.key]))}</td>`).join('') + '</tr>';
+        }).join('');
+        return `<p class="ov-muted">${esc(s.hidden)} hidden and ${esc(s.deleted)} deleted post(s) in this project are not counted in any number above or in the user's app.</p>` +
+            `<div class="ov-bulk"><label><input type="checkbox" id="ov-select-all"> Select all on this page</label><span id="ov-sel-count">${ovSelected.size} selected</span>${bulk}</div>` +
+            `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function ovCreatorsHtml(d) {
+        const c = (key, label, numeric = false) => ({ key, label, numeric });
+        let html;
+        if (ovCreators === null) {
+            html = '<p class="ov-muted">Loading creators...</p>';
+        } else if (ovCreators.error) {
+            html = `<p class="ov-muted">Could not load creators: ${esc(ovCreators.error)}</p>`;
+        } else if (!ovCreators.rows.length) {
+            html = '<p class="ov-muted">No creators in this project.</p>';
+        } else {
+            const btn = (act, label, user, zero) => `<button type="button" class="btn ${act === 'remove' || act === 'delete' ? 'danger-btn' : 'btn-secondary'} ov-small ov-act" data-creator-act="${esc(act)}" data-user="${esc(user)}" data-zero="${zero ? '1' : '0'}">${esc(label)}</button>`;
+            const rows = ovCreators.rows.map(r => {
+                const v = Number(r.visible) || 0, h = Number(r.hidden) || 0, x = Number(r.deleted) || 0;
+                return `<tr><td>@${esc(r.username)}</td><td>${esc(r.role)}</td><td class="ov-num">${esc(v)}</td><td class="ov-num">${esc(h)}</td><td class="ov-num">${esc(x)}</td>` +
+                    `<td>${btn('hide', 'Hide', r.username, v === 0)}${btn('unhide', 'Unhide', r.username, h === 0)}${btn('delete', 'Delete', r.username, v + h === 0)}${btn('remove', 'Remove creator', r.username, false)}</td></tr>`;
+            }).join('');
+            html = '<table><thead><tr><th>Creator</th><th>Role</th><th class="ov-num">Visible</th><th class="ov-num">Hidden</th><th class="ov-num">Deleted</th><th>Actions</th></tr></thead>' +
+                `<tbody>${rows}</tbody></table>`;
+        }
+        return html + '<h4>Reach per creator (visible posts only)</h4>' +
+            ovTable([c('username', 'Creator'), c('role', 'Role'), c('follower_count', 'Followers', true), c('posts', 'Posts', true), c('adds', 'Adds', true), c('scraped_at', 'scraped_at'), c('observed_at', 'observed_at')], d.creators, null);
+    }
+
+    function ovWireTab() {
+        ovEls.tabBody.querySelectorAll('[data-creator-act]').forEach(b => b.addEventListener('click', () => {
+            ovCreatorAction(b.getAttribute('data-creator-act'), b.getAttribute('data-user'));
+        }));
+        ovEls.tabBody.querySelectorAll('[data-bulk]').forEach(b => b.addEventListener('click', () => ovBulkAction(b.getAttribute('data-bulk'))));
+        const picks = ovEls.tabBody.querySelectorAll('.ov-pick');
+        picks.forEach(p => p.addEventListener('change', () => {
+            const sc = p.getAttribute('data-sc');
+            if (p.checked) ovSelected.add(sc); else ovSelected.delete(sc);
+            ovUpdateBulk();
+        }));
+        const all = document.getElementById('ov-select-all');
+        if (all) all.addEventListener('change', () => {
+            picks.forEach(p => {
+                p.checked = all.checked;
+                const sc = p.getAttribute('data-sc');
+                if (all.checked) ovSelected.add(sc); else ovSelected.delete(sc);
+            });
+            ovUpdateBulk();
+        });
+    }
+
+    async function ovPost(path, body) {
+        const url = `/api/admin/users/${encodeURIComponent(ovUser.id)}/projects/${encodeURIComponent(ovData.selected_project_id)}/${path}`;
+        const res = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(body) });
+        if (res.status === 401) { clearAdminSession(); checkAuth(); throw new Error('Signed out'); }
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 409) throw new Error(`The number of posts changed (now ${data.affected}). Nothing was changed; start the action again.`);
+        if (!res.ok) throw new Error(data.error || `Request failed (HTTP ${res.status})`);
+        return data;
+    }
+
+    function ovHideConfirm() {
+        ovActionBox.classList.add('hidden');
+        ovActionBox.textContent = '';
+    }
+
+    // Step 1: preview with dry_run=true, then show the confirm box.
+    async function ovRunAction(spec) {
+        if (ovBusy || !ovData || !ovData.selected_project_id) return;
+        ovHideConfirm();
+        ovSetBusy(true);
+        try {
+            const preview = await ovPost(spec.path, { ...spec.body, dry_run: true });
+            ovShowConfirm(spec, preview);
+        } catch (err) {
+            showToast(err.message, 'error');
+        } finally {
+            ovSetBusy(false);
+        }
+    }
+
+    function ovShowConfirm(spec, preview) {
+        const n = Number(preview.affected) || 0;
+        const box = ovActionBox;
+        box.textContent = '';
+        const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+        const msg = mk('div', 'ov-action-msg', n === 0 && !spec.allowZero ? spec.empty : spec.question(n, preview));
+        box.appendChild(msg);
+        if (spec.hint) box.appendChild(mk('div', 'ov-muted', spec.hint));
+        if (preview.sample && preview.sample.length && n > 0) box.appendChild(mk('div', 'ov-muted', `First posts: ${preview.sample.join(', ')}`));
+        const row = mk('div', 'ov-action-row');
+        const cancel = mk('button', 'btn btn-secondary', n === 0 && !spec.allowZero ? 'Close' : 'Cancel');
+        cancel.type = 'button';
+        cancel.addEventListener('click', ovHideConfirm);
+        if (n === 0 && !spec.allowZero) {
+            row.appendChild(cancel);
+            box.appendChild(row);
+            box.classList.remove('hidden'); box.scrollIntoView({ block: 'nearest' });
+            return;
+        }
+        let input = null;
+        if (spec.typeDelete) {
+            input = mk('input');
+            input.type = 'text';
+            input.placeholder = 'Type DELETE';
+            input.autocomplete = 'off';
+            input.setAttribute('aria-label', 'Type DELETE to confirm');
+            row.appendChild(input);
+        }
+        const ok = mk('button', `btn ${spec.typeDelete ? 'danger-btn' : 'btn-secondary'}`, spec.confirmLabel);
+        ok.type = 'button';
+        const typedOk = () => !input || input.value === 'DELETE';
+        ok.disabled = !typedOk();
+        if (input) input.addEventListener('input', () => { ok.disabled = !typedOk(); });
+        ok.addEventListener('click', async () => {
+            if (ovBusy || !typedOk()) return;
+            ovSetBusy(true);
+            ok.disabled = true;
+            cancel.disabled = true;
+            const old = ok.textContent;
+            ok.textContent = 'Working...';
+            const prev = box.querySelector('.ov-action-error');
+            if (prev) prev.remove();
+            try {
+                const done = await ovPost(spec.path, { ...spec.body, dry_run: false, expect_count: n });
+                showToast(spec.done(done), 'success');
+                ovHideConfirm();
+                ovSelected.clear();
+                await loadOverview(ovData.selected_project_id);
+            } catch (err) {
+                showToast(err.message, 'error');
+                box.appendChild(mk('div', 'ov-action-error', err.message));
+                ok.textContent = old;
+                ok.disabled = !typedOk();
+                cancel.disabled = false;
+            } finally {
+                ovSetBusy(false);
+            }
+        });
+        row.append(ok, cancel);
+        box.appendChild(row);
+        box.classList.remove('hidden'); box.scrollIntoView({ block: 'nearest' });
+        if (input) input.focus();
+    }
+
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+    function ovCreatorAction(action, user) {
+        const pn = ovProjectName();
+        if (action === 'remove') {
+            ovRunAction({
+                path: 'profiles/remove', body: { username: user, with_posts: true }, typeDelete: true, allowZero: true,
+                confirmLabel: 'Remove creator',
+                question: (n, p) => `Remove @${user} from '${pn}' and delete ${plural(n, 'post')} by them in it? (${plural(Number(p.profile_rows) || 0, 'profile row')} removed)`,
+                hint: 'Only this project is changed. The posts stay in the shared database and in other projects; deleted links can be restored later.',
+                done: (r) => `Removed @${user} from '${pn}': ${plural(r.affected, 'post')} deleted, ${plural(r.profile_rows, 'profile row')} removed`,
+            });
+            return;
+        }
+        const v = OV_VERBS[action];
+        if (!v) return;
+        ovRunAction({
+            path: 'posts/action', body: { action, creator: user }, typeDelete: action === 'delete', confirmLabel: v.verb,
+            question: (n) => `${v.verb} ${plural(n, 'post')} by @${user} in '${pn}'?`,
+            empty: `No posts by @${user} in '${pn}' can be ${v.verb.toLowerCase()}d.`,
+            hint: action === 'delete' ? 'Soft delete: the post links of this project are marked deleted and can be restored; other projects are not affected.' : '',
+            done: (r) => `${v.past} ${plural(r.affected, 'post')} by @${user} in '${pn}'`,
+        });
+    }
+
+    function ovBulkAction(action) {
+        const v = OV_VERBS[action];
+        const codes = [...ovSelected];
+        if (!v || !codes.length) return;
+        if (codes.length > 5000) { showToast('Select at most 5000 posts at once', 'error'); return; }
+        const pn = ovProjectName();
+        ovRunAction({
+            path: 'posts/action', body: { action, shortcodes: codes }, typeDelete: action === 'delete', confirmLabel: v.verb,
+            question: (n) => `${v.verb} ${plural(n, 'post')} in '${pn}'?` + (n !== codes.length ? ` (${n} of the ${codes.length} selected posts apply)` : ''),
+            empty: `None of the ${codes.length} selected posts can be ${v.verb.toLowerCase()}d (wrong state).`,
+            hint: action === 'delete' ? 'Soft delete: the post links of this project are marked deleted and can be restored; other projects are not affected.' : '',
+            done: (r) => `${v.past} ${plural(r.affected, 'post')} in '${pn}'`,
+        });
+    }
+
+    async function ovLoadCreators(projectId, mine) {
+        try {
+            const data = await adminGet(`/api/admin/users/${encodeURIComponent(ovUser.id)}/projects/${encodeURIComponent(projectId)}/creators`);
+            if (mine !== ovRequest) return;
+            ovCreators = { rows: data.creators };
+        } catch (err) {
+            if (mine !== ovRequest) return;
+            ovCreators = { error: err.message };
+        }
+        if (ovTab === 'creators') renderOverviewTab();
     }
 
     ovEls.tabs.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {

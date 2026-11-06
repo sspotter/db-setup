@@ -6,7 +6,9 @@
 #   ./scripts/deploy-to-vm.sh --dry-run            checks only; nothing on the VM is changed
 #   ./scripts/deploy-to-vm.sh                      apply the code and restart the three services
 #   ./scripts/deploy-to-vm.sh --migrate            also back up both databases and apply the pending
-#                                                  migrations (v6-v10), then add ADMIN_JWT_SECRET if missing
+#                                                  migrations (TikTok v6-v10, Instagram v7-v11), then add
+#                                                  ADMIN_JWT_SECRET if missing. A deploy whose patch ADDS a
+#                                                  migration file refuses to run without --migrate.
 #   ./scripts/deploy-to-vm.sh --rollback           undo the last deploy made by this script
 #
 # How it works: it asks the VM which commit it runs, builds a patch from that commit to your HEAD
@@ -80,6 +82,13 @@ if echo "$FILES" | grep -Eiq '(^|/)(\.env|.*\.pem|.*\.dump|auth\.json|.*credenti
   echo "STOP: the patch would touch a secret/data-looking file:"; echo "$FILES" | grep -Ei '(^|/)(\.env|.*\.pem|.*\.dump|auth\.json|.*credentials.*)$'; exit 1
 fi
 
+# New code can query columns a new migration adds: never restart it onto a database that lacks them.
+NEW_MIGRATIONS="$(git diff --name-only --diff-filter=A "$BASE" "$HEAD_SHA" | grep -E '^databases/[a-z]+/migrations/.*\.sql$' || true)"
+if [ -n "$NEW_MIGRATIONS" ] && [ "$MIGRATE" = 0 ]; then
+  echo "STOP: this deploy adds migration file(s) the new code needs:"; echo "$NEW_MIGRATIONS" | sed 's/^/   /'
+  echo "Re-run with --migrate (it backs up both databases first, then applies only what is missing)."; exit 1
+fi
+
 scp -q "$PATCH" "$VM:/tmp/db-setup-pending.patch"
 remote "git apply --check /tmp/db-setup-pending.patch" || { remote 'rm -f /tmp/db-setup-pending.patch'; echo "STOP: the patch does not apply cleanly"; exit 1; }
 echo "OK  patch applies cleanly on the VM"
@@ -105,6 +114,7 @@ for db in tiktok instagram; do
   run $db v8_plan_expiry     'has_column "$URL" users plan_expires_at'
   run $db v9_admin_accounts  'has_table "$URL" admin_accounts'
   run $db v10_blocked_ips    'has_table "$URL" blocked_ips'
+  [ "$db" = instagram ] && run $db v11_project_post_hide 'has_column "$URL" project_posts is_hidden'
   if grep -qE '^ADMIN_JWT_SECRET=.+' "databases/$db/.env"; then echo "   ADMIN_JWT_SECRET already set in $db"
   else printf '\nADMIN_JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> "databases/$db/.env"; echo "   ADMIN_JWT_SECRET added to $db/.env"; fi
 done
