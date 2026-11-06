@@ -6,7 +6,7 @@
 #   ./scripts/deploy-to-vm.sh --dry-run            checks only; nothing on the VM is changed
 #   ./scripts/deploy-to-vm.sh                      apply the code and restart the three services
 #   ./scripts/deploy-to-vm.sh --migrate            also back up both databases and apply the pending
-#                                                  migrations (TikTok v6-v10, Instagram v7-v11), then add
+#                                                  migrations (TikTok v6-v12, Instagram v7-v11), then add
 #                                                  ADMIN_JWT_SECRET if missing. A deploy whose patch ADDS a
 #                                                  migration file refuses to run without --migrate.
 #   ./scripts/deploy-to-vm.sh --rollback           undo the last deploy made by this script
@@ -122,6 +122,7 @@ for db in tiktok instagram; do
   run $db v9_admin_accounts  'has_table "$URL" admin_accounts'
   run $db v10_blocked_ips    'has_table "$URL" blocked_ips'
   [ "$db" = instagram ] && run $db v11_project_post_hide 'has_column "$URL" project_posts is_hidden'
+  [ "$db" = tiktok ] && run $db v12_project_profile_hide 'has_column "$URL" project_profiles is_hidden'
   if grep -qE '^ADMIN_JWT_SECRET=.+' "databases/$db/.env"; then echo "   ADMIN_JWT_SECRET already set in $db"
   else printf '\nADMIN_JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> "databases/$db/.env"; echo "   ADMIN_JWT_SECRET added to $db/.env"; fi
 done
