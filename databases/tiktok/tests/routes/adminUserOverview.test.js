@@ -37,6 +37,16 @@ const CREATORS = [
 
 function dbError(code) { const e = new Error(code); e.code = code; return e; }
 
+// mockDb, but any query that mentions pf.is_hidden fails with 42703 (column missing).
+function mockDbWithoutHideColumn() {
+    mockDb();
+    const routed = pool.query.getMockImplementation();
+    pool.query.mockImplementation(async (sql) => {
+        if (/pf\.is_hidden/.test(String(sql))) throw dbError('42703');
+        return routed(sql);
+    });
+}
+
 // Routes each query by its SQL text, so the order of the route's queries does not matter.
 function mockDb(over = {}) {
     const handlers = {
@@ -45,7 +55,7 @@ function mockDb(over = {}) {
         posts: () => ({ rows: POSTS }),
         creators: () => ({ rows: CREATORS }),
         kwSummary: () => ({ rows: [{ total_videos: '5', total_views: '900', potential_reach: '400' }] }),
-        kwRows: () => ({ rows: [{ keyword: 'tea', videos: '5', reach_videos: '4', reach_views: '400', hidden_reach_videos: '1', hidden_reach_views: '150' }] }),
+        kwRows: () => ({ rows: [{ keyword: 'tea', videos: '5', views: '900', reach_videos: '4', reach_views: '400', hidden_videos: '1' }] }),
         comments: () => ({ rows: [{ shortcode: 'p1', stored: '3' }] }),
         audit: () => ({ rows: [{ created_at: '2026-03-02T00:00:00Z', actor: 'shared-password', action: 'user_update', detail: { plan: 'pro', token: 'SECRET-TOKEN' } }] }),
         events: () => ({ rows: [{ created_at: '2026-03-03T00:00:00Z', method: 'POST', path: '/api/posts', status: 200, reason: 'foreign_posts_skipped', error: null }] }),
@@ -229,6 +239,35 @@ describe('GET /api/admin/users/:id/overview', () => {
         expect(res.status).toBe(200);
         expect(res.body.sessions).toEqual([]);
         expect(res.body.warnings.filter((w) => w.code === 'source_missing').length).toBeGreaterThan(0);
+    });
+
+    it('shows the keyword model: live visible videos / views / reach, with hidden videos excluded', async () => {
+        const { body } = await admin(request(app).get(url()));
+        expect(metricOf(body, 'keyword_videos_live')).toMatchObject({ label: 'Keyword videos (visible)', value: 5 });
+        expect(metricOf(body, 'keyword_views_live')).toMatchObject({ label: 'Keyword views', value: 900 });
+        expect(metricOf(body, 'keyword_potential_reach').label).toMatch(/visible, included_in_reach/);
+        expect(metricOf(body, 'keyword_videos')).toMatchObject({ label: 'Keyword videos (stored counter)', value: 5 });
+        expect(body.breakdowns.keyword_reach.rows[0]).toMatchObject({ keyword: 'tea', videos: 5, hidden_videos: 1 });
+        expect(warningCodes(body)).toContain('hidden_keyword_videos');
+        expect(warningCodes(body)).not.toContain('hidden_counted_keyword_potential_reach');
+        const sqls = pool.query.mock.calls.map((c) => String(c[0]));
+        expect(sqls.find((s) => /FROM search_keywords WHERE/.test(s))).toMatch(/included_in_reach = true\s+AND \(is_hidden = false OR is_hidden IS NULL\)/);
+    });
+
+    it('leaves hidden profiles out of the profile count and the partner list', async () => {
+        await admin(request(app).get(url()));
+        const sqls = pool.query.mock.calls.map((c) => String(c[0]));
+        expect(sqls.find((s) => /FROM projects pr/.test(s))).toMatch(/pf\.project_id = pr\.id AND pf\.is_hidden = false/);
+        expect(sqls.find((s) => /WITH project_posts_cte/.test(s))).toMatch(/hp\.is_hidden = true/);
+    });
+
+    it('still works, with a warning, before migration v12 (no project_profiles.is_hidden)', async () => {
+        mockDbWithoutHideColumn();
+        const res = await admin(request(app).get(url()));
+        expect(res.status).toBe(200);
+        expect(warningCodes(res.body)).toContain('profile_hide_missing');
+        const creators = pool.query.mock.calls.map((c) => String(c[0])).find((s) => /WITH project_posts_cte/.test(s));
+        expect(creators).not.toMatch(/hp\.is_hidden/);
     });
 
     it('works for a user without projects', async () => {

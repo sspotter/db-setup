@@ -92,6 +92,34 @@ describe('project numbers exclude hidden and deleted post links', () => {
         everyLinkQueryFilters();
     });
 
+    // A profile an admin hid for the project (project_profiles.is_hidden) disappears from the user's app.
+    const profileSqls = () => pool.query.mock.calls.map((c) => String(c[0])).filter((s) => /project_profiles/.test(s));
+
+    it('GET /projects/:id/profiles lists no hidden profile', async () => {
+        await request(app).get('/api/projects/p1/profiles');
+        expect(profileSqls().find((s) => /FROM project_profiles pp/.test(s))).toMatch(/pp\.project_id = \$1 AND pp\.is_hidden = false/);
+    });
+
+    it('profile counts (project list and project stats) skip hidden profiles', async () => {
+        await request(app).get('/api/projects');
+        expect(profileSqls().join(' ')).toMatch(/pp\.project_id = p\.id AND pp\.is_hidden = false/);
+        pool.query.mockClear();
+        await request(app).get('/api/projects/p1/stats');
+        expect(profileSqls().join(' ')).toMatch(/COUNT\(\*\) FROM project_profiles WHERE project_id = \$1 AND is_hidden = false/);
+    });
+
+    it('stats partners / reach by role leave a hidden profile out', async () => {
+        await request(app).get('/api/projects/p1/stats');
+        const partners = profileSqls().find((s) => /partner_stats AS/.test(s));
+        expect(partners).toMatch(/WHERE NOT EXISTS \(SELECT 1 FROM project_profiles hp\s+WHERE hp\.project_id = \$1 AND hp\.username = ap\.username AND hp\.is_hidden = true\)/);
+    });
+
+    it('keyword potential reach skips hidden keyword videos', async () => {
+        await request(app).get('/api/projects/p1');
+        const kw = pool.query.mock.calls.map((c) => String(c[0])).find((s) => /AS potential_reach/.test(s));
+        expect(kw).toMatch(/included_in_reach = true\s+AND \(is_hidden = false OR is_hidden IS NULL\)/);
+    });
+
     it('GET /projects/:id/posts still lists only visible links, with no duplicated condition', async () => {
         await request(app).get('/api/projects/p1/posts');
         for (const sql of touchingLinks()) {

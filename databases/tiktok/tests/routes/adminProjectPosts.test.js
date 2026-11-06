@@ -352,6 +352,37 @@ describe('admin project posts', () => {
         });
     });
 
+    describe('POST profiles/remove with usernames[] (bulk)', () => {
+        it('rejects an empty, oversized or non-string list', async () => {
+            for (const usernames of [[], 'a', [1], Array.from({ length: 201 }, (_, i) => `u${i}`)]) {
+                const res = await admin(request(app).post(REMOVE_URL)).send({ usernames });
+                expect(res.status).toBe(400);
+            }
+            expect(pool.connect).not.toHaveBeenCalled();
+        });
+
+        it('previews posts (de-duplicated) and profile rows over all names', async () => {
+            matched = codes(3);
+            profileRows = 1;
+            const res = await admin(request(app).post(REMOVE_URL)).send({ usernames: ['A', 'a', 'b'], with_posts: true });
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ dry_run: true, affected: 3, profile_rows: 2 });
+            expect(writes()).toEqual([]);
+        });
+
+        it('removes every named profile, soft-deletes the posts once and audits', async () => {
+            matched = codes(3);
+            const res = await admin(request(app).post(REMOVE_URL)).send({ usernames: ['a', 'b'], with_posts: true, dry_run: false, expect_count: 3 });
+            expect(res.status).toBe(200);
+            expect(res.body).toMatchObject({ affected: 3, profile_rows: 2 });
+            expect(writes().filter((s) => /DELETE FROM project_profiles/.test(s))).toHaveLength(2);
+            expect(writes().filter((s) => /UPDATE project_posts pp SET/.test(s))).toHaveLength(1);
+            const [, params] = auditCalls()[0];
+            expect(params[0]).toBe('project_creator_remove');
+            expect(JSON.parse(params[3])).toMatchObject({ usernames: ['a', 'b'] });
+        });
+    });
+
     describe('GET creators', () => {
         it('rejects malformed ids', async () => {
             const res = await admin(request(app).get(`/api/admin/users/${USER}/projects/nope/creators`));

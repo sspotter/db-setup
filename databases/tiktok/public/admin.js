@@ -1497,6 +1497,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let overviewSelected = new Set(); // shortcodes ticked in the Posts tab
     let overviewBusy = false;
     let overviewPending = null; // the action waiting for the admin's confirmation
+    let overviewKeywords = null; // GET .../keywords (null until the tab is opened)
+    let overviewVideos = null; // { total, videos } of GET .../videos
+    let overviewProfiles = null; // { total, profiles } of GET .../profiles
+    let overviewVideoKeyword = null; // keyword id the Videos tab is filtered to
+    let overviewTabError = {}; // tab -> message when its data could not be loaded
+    const overviewTabLoading = new Set(); // tabs whose data is being fetched
+    let overviewSelVideos = new Set(); // video ids ticked in the Videos tab
+    let overviewSelProfiles = new Set(); // usernames ticked in the Profiles tab
+    let overviewProfileWithPosts = true; // "also hide their posts and videos" box of the Profiles tab
 
     // Every value that reaches innerHTML below goes through ovEsc (null shows as empty, 0 stays 0).
     const ovEsc = (v) => escapeHTML(v === null || v === undefined ? '' : String(v));
@@ -1508,6 +1517,7 @@ document.addEventListener('DOMContentLoaded', () => {
         overviewTitle.textContent = `Overview of ${email}`;
         overviewTab = 'posts';
         overviewMetricKey = null;
+        overviewVideoKeyword = null;
         overviewProject.innerHTML = '';
         openModal(overviewModal);
         await loadOverview(null);
@@ -1518,6 +1528,12 @@ document.addEventListener('DOMContentLoaded', () => {
         overviewLoading.classList.remove('hidden');
         overviewSelected = new Set();
         overviewCreators = null;
+        overviewKeywords = null;
+        overviewVideos = null;
+        overviewProfiles = null;
+        overviewTabError = {};
+        overviewSelVideos = new Set();
+        overviewSelProfiles = new Set();
         ovHideConfirm();
         try {
             const q = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
@@ -1535,7 +1551,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    overviewProject.addEventListener('change', () => { overviewMetricKey = null; loadOverview(overviewProject.value); });
+    overviewProject.addEventListener('change', () => { overviewMetricKey = null; overviewVideoKeyword = null; loadOverview(overviewProject.value); });
 
     // ---- Admin actions: hide / unhide / delete / restore posts, remove a creator ----
     // Every action first asks the server for a dry run (nothing changes), shows what it would do, and
@@ -1567,7 +1583,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function ovApplyBusy() {
-        overviewModal.querySelectorAll('.ov-act, .ov-bulk, .ov-pick, #ov-select-all, #ov-confirm-ok, #ov-confirm-cancel')
+        overviewModal.querySelectorAll('.ov-act, .ov-bulk, .ov-pick, #ov-select-all, #ov-select-all-videos, #ov-select-all-profiles, #ov-prof-withposts, #ov-kw-clear, #ov-confirm-ok, #ov-confirm-cancel')
             .forEach(el => { if (overviewBusy) el.disabled = true; else if (el.dataset.disabledWhenIdle !== '1') el.disabled = false; });
     }
     function ovSetBusy(busy) { overviewBusy = busy; ovApplyBusy(); }
@@ -1584,17 +1600,25 @@ document.addEventListener('DOMContentLoaded', () => {
         overviewConfirm.innerHTML = '';
     }
 
-    // spec: { kind: 'posts' | 'remove', action?, body, subject } where subject is e.g. "by @name" or "selected".
+    // spec: { kind: 'posts' | 'remove' | 'videos' | 'profiles', action?, body, subject? }.
+    // posts: body { action, creator | shortcodes }; videos: { action, video_ids?, keyword_id? };
+    // profiles: { action, usernames, with_posts }; remove: { username | usernames }.
+    const OV_PATH = { posts: 'posts/action', remove: 'profiles/remove', videos: 'videos/action', profiles: 'profiles/action' };
+    const ovPlural = (n, one, many) => `${n} ${n === 1 ? one : many || `${one}s`}`;
+    const ovNothingToDo = (spec, p) => (spec.kind === 'profiles'
+        ? p.affected + p.posts_affected + p.videos_affected === 0
+        : spec.kind !== 'remove' && p.affected === 0);
+
     async function ovStart(spec) {
         if (overviewBusy || !overviewData || !overviewData.selected_project_id) return;
         overviewError.classList.add('hidden');
         ovHideConfirm();
         ovSetBusy(true);
         try {
-            const path = `${ovProjectBase()}/${spec.kind === 'remove' ? 'profiles/remove' : 'posts/action'}`;
+            const path = `${ovProjectBase()}/${OV_PATH[spec.kind]}`;
             const preview = await adminPost(path, { ...spec.body, dry_run: true });
-            if (spec.kind === 'posts' && preview.affected === 0) {
-                showToast(`Nothing to ${spec.action}: no matching posts`, 'error');
+            if (ovNothingToDo(spec, preview)) {
+                showToast(`Nothing to ${spec.action}: nothing matches (already in that state?)`, 'error');
                 return;
             }
             ovShowConfirm(spec, path, preview);
@@ -1605,26 +1629,56 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function ovConfirmQuestion(spec, preview, project) {
+        const n = preview.affected;
+        if (spec.kind === 'remove') {
+            const names = spec.body.usernames || [spec.body.username];
+            return `Remove ${names.length === 1 ? `@${names[0]}` : `${names.length} profiles`} from '${project}'?`;
+        }
+        if (spec.kind === 'videos') {
+            const sel = spec.body.video_ids ? ` of the ${ovPlural(spec.body.video_ids.length, 'selected id')}` : '';
+            return `${OV_VERB[spec.action]} ${ovPlural(n, 'keyword video')}${n !== (spec.body.video_ids || []).length ? sel : ''} in '${project}'?`;
+        }
+        if (spec.kind === 'profiles') {
+            const names = spec.body.usernames;
+            return `${OV_VERB[spec.action]} ${names.length === 1 ? `@${names[0]}` : ovPlural(preview.affected, 'profile')} in '${project}'?`;
+        }
+        const what = spec.subject === 'selected'
+            ? `${ovPosts(n)}${spec.body.shortcodes && n !== spec.body.shortcodes.length ? ` of the ${spec.body.shortcodes.length} selected` : ' selected'}`
+            : `${ovPosts(n)} by @${spec.subject}`;
+        return `${OV_VERB[spec.action]} ${what} in '${project}'?`;
+    }
+
+    function ovConfirmNotes(spec, preview) {
+        const notes = [];
+        if (spec.action === 'delete' || spec.kind === 'remove') {
+            notes.push('Posts are soft-deleted for this project only (other projects and users keep them) and can be brought back with Restore.');
+        }
+        if (spec.kind === 'videos' && preview.posts_affected > 0) {
+            notes.push(`${ovPlural(preview.posts_affected, 'saved post link')} with the same id in this project ${spec.action === 'hide' ? 'will be hidden' : 'will be unhidden'} too.`);
+        }
+        if (spec.kind === 'profiles') {
+            notes.push(spec.body.with_posts
+                ? `Also ${spec.action === 'hide' ? 'hides' : 'unhides'} ${ovPosts(preview.posts_affected)} and ${ovPlural(preview.videos_affected, 'keyword video')} by ${spec.body.usernames.length === 1 ? 'this profile' : 'these profiles'} in this project.`
+                : 'Their posts and keyword videos are not changed.');
+            if (spec.action === 'hide') notes.push('The user\'s app stops listing the profile and counting it in partners and reach for this project.');
+        }
+        return notes.map(n => `<div class="ov-muted">${ovEsc(n)}</div>`).join('');
+    }
+
     function ovShowConfirm(spec, path, preview) {
         overviewPending = { spec, path, preview };
         const project = ovProjectName();
-        const n = preview.affected;
-        let question;
+        const question = ovConfirmQuestion(spec, preview, project);
         let withPostsBox = '';
         if (spec.kind === 'remove') {
-            question = `Remove @${spec.body.username} from '${project}'?`;
-            withPostsBox = `<label class="ov-confirm-row"><input type="checkbox" id="ov-confirm-withposts" checked> also delete their ${ovPosts(n)} in this project (${ovEsc(preview.profile_rows)} profile row${preview.profile_rows === 1 ? '' : 's'} removed)</label>`;
-        } else {
-            const what = spec.subject === 'selected'
-                ? `${ovPosts(n)}${n !== spec.body.shortcodes.length ? ` of the ${spec.body.shortcodes.length} selected` : ' selected'}`
-                : `${ovPosts(n)} by @${spec.subject}`;
-            question = `${OV_VERB[spec.action]} ${what} in '${project}'?`;
+            withPostsBox = `<label class="ov-confirm-row"><input type="checkbox" id="ov-confirm-withposts" checked> also delete their ${ovPosts(preview.affected)} in this project (${ovEsc(preview.profile_rows)} profile row${preview.profile_rows === 1 ? '' : 's'} removed)</label>`;
         }
         const needsWord = spec.kind === 'remove' || spec.action === 'delete';
         overviewConfirm.innerHTML = `
             <div class="ov-confirm-text">${ovEsc(question)}</div>
             ${withPostsBox}
-            ${spec.action === 'delete' || spec.kind === 'remove' ? '<div class="ov-muted">Posts are soft-deleted for this project only (other projects and users keep them) and can be brought back with Restore.</div>' : ''}
+            ${ovConfirmNotes(spec, preview)}
             ${needsWord ? '<div class="ov-confirm-row">Type <strong>DELETE</strong> to confirm: <input type="text" id="ov-confirm-word" autocomplete="off" aria-label="Type DELETE"></div>' : ''}
             <div class="ov-confirm-row">
                 <button type="button" id="ov-confirm-ok" class="btn ${needsWord ? 'danger-btn' : 'primary-btn'}"${needsWord ? ' disabled data-disabled-when-idle="1"' : ''}>Confirm</button>
@@ -1643,29 +1697,50 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // The body of the real call: the previewed body plus the numbers the admin was shown.
+    function ovRealBody(spec, preview) {
+        if (spec.kind === 'remove') {
+            const box = document.getElementById('ov-confirm-withposts');
+            const withPosts = box ? box.checked : true;
+            return { ...spec.body, with_posts: withPosts, dry_run: false, expect_count: withPosts ? preview.affected : 0 };
+        }
+        if (spec.kind === 'profiles') {
+            return { ...spec.body, dry_run: false, expect_count: preview.affected, expect_posts: preview.posts_affected, expect_videos: preview.videos_affected };
+        }
+        return { ...spec.body, dry_run: false, expect_count: preview.affected };
+    }
+
+    function ovDoneMessage(spec, result) {
+        if (spec.kind === 'remove') {
+            return `Removed ${ovPlural(result.profile_rows, 'profile')}${result.affected ? ` and deleted ${ovPosts(result.affected)}` : ''}`;
+        }
+        if (spec.kind === 'videos') return `${OV_DONE[spec.action]} ${ovPlural(result.affected, 'keyword video')}`;
+        if (spec.kind === 'profiles') {
+            return `${OV_DONE[spec.action]} ${ovPlural(result.affected, 'profile')}${spec.body.with_posts ? ` (${ovPosts(result.posts_affected)}, ${ovPlural(result.videos_affected, 'video')})` : ''}`;
+        }
+        return `${OV_DONE[spec.action]} ${ovPosts(result.affected)}`;
+    }
+
     async function ovConfirm() {
         if (overviewBusy || !overviewPending) return;
         const { spec, path, preview } = overviewPending;
         const word = document.getElementById('ov-confirm-word');
         if (word && word.value !== 'DELETE') return;
-        const box = document.getElementById('ov-confirm-withposts');
-        const withPosts = box ? box.checked : true;
-        const body = spec.kind === 'remove'
-            ? { ...spec.body, with_posts: withPosts, dry_run: false, expect_count: withPosts ? preview.affected : 0 }
-            : { ...spec.body, dry_run: false, expect_count: preview.affected };
+        const body = ovRealBody(spec, preview);
         const projectId = overviewData.selected_project_id;
         ovSetBusy(true);
         try {
             const result = await adminPost(path, body);
             ovHideConfirm();
-            showToast(spec.kind === 'remove'
-                ? `Removed @${spec.body.username}${result.affected ? ` and deleted ${ovPosts(result.affected)}` : ''}`
-                : `${OV_DONE[spec.action]} ${ovPosts(result.affected)}`);
+            showToast(ovDoneMessage(spec, result));
+            overviewSelected = new Set();
+            overviewSelVideos = new Set();
+            overviewSelProfiles = new Set();
             await loadOverview(projectId);
         } catch (err) {
             if (err.status === 409) {
                 ovHideConfirm();
-                err.message = `The number of posts changed (now ${err.data && err.data.affected}). Nothing was changed; try again.`;
+                err.message = `The numbers changed (now ${err.data && err.data.affected}). Nothing was changed; try again.`;
             }
             ovFail(err);
         } finally {
@@ -1673,32 +1748,68 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // One delegated handler for everything inside the confirm box and the Posts / Creators tabs.
+    // One delegated handler for the confirm box, the tabs and their buttons.
     overviewModal.addEventListener('click', (e) => {
         const t = e.target.closest('button');
-        if (!t) return;
+        if (!t) {
+            const row = e.target.closest('.ov-kw-row');
+            if (row && !e.target.closest('a, input')) ovShowKeywordVideos(row.getAttribute('data-kw'));
+            return;
+        }
         if (t.id === 'ov-confirm-ok') { ovConfirm(); return; }
         if (t.id === 'ov-confirm-cancel') { ovHideConfirm(); return; }
+        if (t.id === 'ov-kw-clear') { ovShowKeywordVideos(null); return; }
+        const kind = t.getAttribute('data-kind') || 'creator';
+        const act = t.getAttribute('data-act');
         if (t.classList.contains('ov-act')) {
             const name = t.getAttribute('data-user');
-            if (t.getAttribute('data-act') === 'remove') ovStart({ kind: 'remove', body: { username: name, with_posts: true } });
-            else ovStart({ kind: 'posts', action: t.getAttribute('data-act'), subject: name, body: { action: t.getAttribute('data-act'), creator: name } });
+            if (kind === 'post') {
+                ovStart({ kind: 'posts', action: act, subject: 'selected', body: { action: act, shortcodes: [t.getAttribute('data-code')] } });
+            } else if (kind === 'video') {
+                ovStart({ kind: 'videos', action: act, body: { action: act, video_ids: [t.getAttribute('data-code')], keyword_id: t.getAttribute('data-kw') } });
+            } else if (kind === 'profile') {
+                if (act === 'remove') ovStart({ kind: 'remove', action: 'remove', body: { username: name, with_posts: true } });
+                else ovStart({ kind: 'profiles', action: act, body: { action: act, usernames: [name], with_posts: ovProfileWithPosts() } });
+            } else if (act === 'remove') {
+                ovStart({ kind: 'remove', action: 'remove', body: { username: name, with_posts: true } });
+            } else {
+                ovStart({ kind: 'posts', action: act, subject: name, body: { action: act, creator: name } });
+            }
         } else if (t.classList.contains('ov-bulk')) {
-            const action = t.getAttribute('data-act');
-            ovStart({ kind: 'posts', action, subject: 'selected', body: { action, shortcodes: [...overviewSelected] } });
+            if (kind === 'video') {
+                ovStart({ kind: 'videos', action: act, body: { action: act, video_ids: [...overviewSelVideos] } });
+            } else if (kind === 'profile') {
+                const usernames = [...overviewSelProfiles];
+                if (act === 'remove') ovStart({ kind: 'remove', action: 'remove', body: { usernames, with_posts: true } });
+                else ovStart({ kind: 'profiles', action: act, body: { action: act, usernames, with_posts: ovProfileWithPosts() } });
+            } else {
+                ovStart({ kind: 'posts', action: act, subject: 'selected', body: { action: act, shortcodes: [...overviewSelected] } });
+            }
         }
     });
     overviewModal.addEventListener('change', (e) => {
         const t = e.target;
+        const pick = (set, all) => { if (t.checked) all.forEach(x => set.add(x)); else all.forEach(x => set.delete(x)); };
         if (t.id === 'ov-select-all') {
             overviewSelected = t.checked ? new Set(overviewData.posts.map(p => p.shortcode)) : new Set();
             renderOverviewTab();
+        } else if (t.id === 'ov-select-all-videos') {
+            pick(overviewSelVideos, overviewVideos.videos.map(v => v.video_id));
+            renderOverviewTab();
+        } else if (t.id === 'ov-select-all-profiles') {
+            pick(overviewSelProfiles, overviewProfiles.profiles.map(p => p.username));
+            renderOverviewTab();
         } else if (t.classList.contains('ov-pick')) {
             const code = t.getAttribute('data-code');
-            if (t.checked) overviewSelected.add(code); else overviewSelected.delete(code);
+            const kind = t.getAttribute('data-kind');
+            const set = kind === 'video' ? overviewSelVideos : kind === 'profile' ? overviewSelProfiles : overviewSelected;
+            if (t.checked) set.add(code); else set.delete(code);
             renderOverviewTab();
+        } else if (t.id === 'ov-prof-withposts') {
+            overviewProfileWithPosts = t.checked;
         }
     });
+    const ovProfileWithPosts = () => overviewProfileWithPosts;
 
     function renderOverview() {
         const d = overviewData;
@@ -1755,8 +1866,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderOverviewTab() {
         const d = overviewData;
+        const lazy = (tab, render) => () => {
+            if (overviewTabError[tab]) return `<p class="ov-muted" style="padding:10px">${ovEsc(overviewTabError[tab])}</p>`;
+            if (!ovTabLoaded(tab)) { ovLoadTabData(tab); return '<p class="ov-muted" style="padding:10px">Loading...</p>'; }
+            return render();
+        };
         const tabs = {
             posts: () => ovPostsTab(d),
+            keywords: lazy('keywords', ovKeywordsTab),
+            videos: lazy('videos', ovVideosTab),
+            profiles: lazy('profiles', ovProfilesTab),
             creators: () => ovCreatorsTab(),
             save_history: () => ovTable([
                 { key: 'at', label: 'When' }, { key: 'action', label: 'Action' }, { key: 'detail', label: 'Detail' }, { key: 'source', label: 'Source' },
@@ -1769,7 +1888,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ovApplyBusy();
     }
 
-    // Posts tab: a checkbox per row, the state of each link and a bulk bar for the ticked rows.
+    // Posts tab: a checkbox per row, the state of each link, a Hide / Unhide button per row and a bulk bar.
     function ovPostsTab(d) {
         if (!d.posts.length) return '<p class="ov-muted" style="padding:10px">No rows.</p>';
         const n = overviewSelected.size;
@@ -1779,17 +1898,135 @@ document.addEventListener('DOMContentLoaded', () => {
             `<button type="button" class="btn secondary-btn ov-bulk${a === 'delete' ? ' delete' : ''}" data-act="${a}"${none}>${OV_VERB[a]} selected</button>`).join('');
         const rows = d.posts.map(p => {
             const state = p.state || (p.deleted_at ? 'deleted' : p.is_hidden ? 'hidden' : 'visible');
+            const act = state === 'visible' ? 'hide' : state === 'hidden' ? 'unhide' : null;
+            const button = act
+                ? `<button type="button" class="btn secondary-btn ov-act" data-kind="post" data-act="${act}" data-code="${ovEsc(p.shortcode)}">${OV_VERB[act]}</button>`
+                : '';
             return `<tr${state !== 'visible' ? ' class="ov-excluded"' : ''}>
                 <td><input type="checkbox" class="ov-pick" data-code="${ovEsc(p.shortcode)}" aria-label="Select ${ovEsc(p.shortcode)}"${overviewSelected.has(p.shortcode) ? ' checked' : ''}></td>
                 <td>${ovEsc(p.shortcode)}</td><td>${ovEsc(p.owner)}</td>
                 <td class="ov-num">${ovNum(p.likes)}</td><td class="ov-num">${ovNum(p.comments)}</td><td class="ov-num">${ovNum(p.views)}</td>
                 <td>${ovEsc(ovDate(p.posted_at))}</td>
-                <td class="ov-state-${ovEsc(state)}">${ovEsc(state)}</td></tr>`;
+                <td class="ov-state-${ovEsc(state)}">${ovEsc(state)}</td>
+                <td class="ov-actions-cell">${button}</td></tr>`;
         }).join('');
         return `<div class="ov-bulk-bar">
                 <label><input type="checkbox" id="ov-select-all"${allTicked ? ' checked' : ''}> Select all on this page (${ovEsc(d.posts.length)})</label>
                 <span>${ovEsc(n)} selected</span>${bulk}</div>
-            <table class="ov-table"><thead><tr><th></th><th>Post</th><th>Owner</th><th class="ov-num">Likes</th><th class="ov-num">Comments</th><th class="ov-num">Views</th><th>Posted</th><th>State</th></tr></thead><tbody>${rows}</tbody></table>`;
+            <table class="ov-table"><thead><tr><th></th><th>Post</th><th>Owner</th><th class="ov-num">Likes</th><th class="ov-num">Comments</th><th class="ov-num">Views</th><th>Posted</th><th>State</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Loads the data behind the Keywords / Videos / Profiles tabs the first time a tab is shown.
+    async function ovLoadTabData(tab) {
+        const projectId = overviewData && overviewData.selected_project_id;
+        if (!projectId) return;
+        if (overviewTabLoading.has(tab)) return;
+        overviewTabLoading.add(tab);
+        const base = ovProjectBase();
+        const keywordAtStart = overviewVideoKeyword;
+        let result = null;
+        let message = null;
+        try {
+            if (tab === 'keywords') {
+                result = (await adminGet(`${base}/keywords`)).keywords;
+            } else if (tab === 'videos') {
+                const r = await adminGet(`${base}/videos${keywordAtStart ? `?keyword_id=${encodeURIComponent(keywordAtStart)}` : ''}`);
+                result = { total: r.total, videos: r.videos };
+            } else {
+                const r = await adminGet(`${base}/profiles`);
+                result = { total: r.total, profiles: r.profiles };
+            }
+        } catch (err) {
+            message = err.message;
+        }
+        overviewTabLoading.delete(tab);
+        // The admin may have switched project or keyword while this was loading: drop a stale answer.
+        const stale = !overviewData || overviewData.selected_project_id !== projectId || (tab === 'videos' && keywordAtStart !== overviewVideoKeyword);
+        if (stale) { if (overviewTab === tab) renderOverviewTab(); return; }
+        if (message) overviewTabError[tab] = message;
+        else if (tab === 'keywords') overviewKeywords = result;
+        else if (tab === 'videos') overviewVideos = result;
+        else overviewProfiles = result;
+        if (overviewTab === tab) renderOverviewTab();
+    }
+    const ovTabLoaded = (tab) => ({ keywords: overviewKeywords, videos: overviewVideos, profiles: overviewProfiles })[tab] !== null || !!overviewTabError[tab];
+
+    function ovShowKeywordVideos(keywordId) {
+        overviewVideoKeyword = keywordId || null;
+        overviewVideos = null;
+        overviewSelVideos = new Set();
+        delete overviewTabError.videos;
+        overviewTab = 'videos';
+        overviewTabs.querySelectorAll('.ov-tab').forEach(x => x.classList.toggle('active', x.getAttribute('data-tab') === 'videos'));
+        renderOverviewTab();
+    }
+
+    // Keywords tab: one row per search keyword; a click filters the Videos tab to it.
+    function ovKeywordsTab() {
+        if (!overviewKeywords.length) return '<p class="ov-muted" style="padding:10px">This project has no search keywords.</p>';
+        const rows = overviewKeywords.map(k => `<tr class="ov-kw-row" data-kw="${ovEsc(k.id)}" title="Show these videos">
+            <td>${ovEsc(k.keyword)}</td><td>${ovEsc(k.status)}</td><td>${ovEsc(k.source_type)}</td>
+            <td class="ov-num">${ovNum(k.videos)}${k.hidden_videos ? ` <span class="ov-muted">(+${ovNum(k.hidden_videos)} hidden)</span>` : ''}</td>
+            <td class="ov-num${k.stored_videos !== k.videos ? ' ov-drift' : ''}">${ovNum(k.stored_videos)}</td>
+            <td class="ov-num">${ovNum(k.creators)}</td><td class="ov-num">${ovNum(k.views)}</td><td class="ov-num">${ovNum(k.engagement)}</td>
+            <td>${ovEsc(ovDate(k.created_at))}</td></tr>`).join('');
+        return `<p class="ov-muted" style="padding:8px 4px 0">Click a keyword to see its videos. "Stored" is the counter on the keyword row; the live count excludes hidden videos.</p>
+            <table class="ov-table"><thead><tr><th>Keyword</th><th>Status</th><th>Source</th><th class="ov-num">Videos (live)</th><th class="ov-num">Stored total</th><th class="ov-num">Creators</th><th class="ov-num">Views</th><th class="ov-num">Engagement</th><th>Created</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Videos tab: the project's keyword videos, a checkbox per row, Hide / Unhide per row and in bulk.
+    function ovVideosTab() {
+        const { total, videos } = overviewVideos;
+        const kw = overviewVideoKeyword && overviewKeywords ? overviewKeywords.find(k => k.id === overviewVideoKeyword) : null;
+        const filter = overviewVideoKeyword
+            ? `<span class="ov-chip">Keyword: ${ovEsc(kw ? kw.keyword : overviewVideoKeyword)} <button type="button" id="ov-kw-clear" class="ov-chip-x" aria-label="Show all keywords">&times;</button></span>`
+            : '';
+        const cap = total > videos.length ? `<span>Showing the newest ${ovEsc(videos.length)} of ${ovEsc(total)} videos.</span>` : `<span>${ovEsc(total)} video${total === 1 ? '' : 's'}.</span>`;
+        if (!videos.length) return `<div class="ov-bulk-bar">${filter}${cap}</div><p class="ov-muted" style="padding:10px">No rows.</p>`;
+        const n = overviewSelVideos.size;
+        const none = n === 0 ? ' disabled data-disabled-when-idle="1"' : '';
+        const allTicked = videos.every(v => overviewSelVideos.has(v.video_id));
+        const bulk = ['hide', 'unhide'].map(a =>
+            `<button type="button" class="btn secondary-btn ov-bulk" data-kind="video" data-act="${a}"${none}>${OV_VERB[a]} selected</button>`).join('');
+        const rows = videos.map(v => {
+            const act = v.state === 'hidden' ? 'unhide' : 'hide';
+            return `<tr${v.state !== 'visible' ? ' class="ov-excluded"' : ''}>
+                <td><input type="checkbox" class="ov-pick" data-kind="video" data-code="${ovEsc(v.video_id)}" aria-label="Select ${ovEsc(v.video_id)}"${overviewSelVideos.has(v.video_id) ? ' checked' : ''}></td>
+                <td>${ovEsc(v.video_id)}</td><td>${ovEsc(v.username)}</td><td class="ov-caption">${ovEsc(v.caption)}</td>
+                <td class="ov-num">${ovNum(v.views)}</td><td class="ov-num">${ovNum(v.likes)}</td><td class="ov-num">${ovNum(v.comments)}</td><td class="ov-num">${ovNum(v.shares)}</td>
+                <td>${ovEsc(ovDate(v.posted_at))}</td><td>${v.included_in_reach ? 'yes' : 'no'}</td>
+                <td class="ov-state-${ovEsc(v.state)}">${ovEsc(v.state)}</td>
+                <td class="ov-actions-cell"><button type="button" class="btn secondary-btn ov-act" data-kind="video" data-act="${act}" data-code="${ovEsc(v.video_id)}" data-kw="${ovEsc(v.keyword_id)}">${OV_VERB[act]}</button></td></tr>`;
+        }).join('');
+        return `<div class="ov-bulk-bar">${filter}${cap}
+                <label><input type="checkbox" id="ov-select-all-videos"${allTicked ? ' checked' : ''}> Select all listed (${ovEsc(videos.length)})</label>
+                <span>${ovEsc(n)} selected</span>${bulk}</div>
+            <table class="ov-table"><thead><tr><th></th><th>Video</th><th>Creator</th><th>Caption</th><th class="ov-num">Views</th><th class="ov-num">Likes</th><th class="ov-num">Comments</th><th class="ov-num">Shares</th><th>Posted</th><th>In reach</th><th>State</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // Profiles tab: the project's profiles, Hide / Unhide / Remove per row and in bulk.
+    function ovProfilesTab() {
+        const { total, profiles } = overviewProfiles;
+        const box = `<label><input type="checkbox" id="ov-prof-withposts"${overviewProfileWithPosts ? ' checked' : ''}> also hide their posts and videos in this project</label>`;
+        const cap = total > profiles.length ? `<span>Showing ${ovEsc(profiles.length)} of ${ovEsc(total)} profiles.</span>` : `<span>${ovEsc(total)} profile${total === 1 ? '' : 's'}.</span>`;
+        if (!profiles.length) return `<div class="ov-bulk-bar">${cap}</div><p class="ov-muted" style="padding:10px">No rows.</p>`;
+        const n = overviewSelProfiles.size;
+        const none = n === 0 ? ' disabled data-disabled-when-idle="1"' : '';
+        const allTicked = profiles.every(p => overviewSelProfiles.has(p.username));
+        const bulk = ['hide', 'unhide', 'remove'].map(a =>
+            `<button type="button" class="btn secondary-btn ov-bulk${a === 'remove' ? ' delete' : ''}" data-kind="profile" data-act="${a}"${none}>${a === 'remove' ? 'Remove' : OV_VERB[a]} selected</button>`).join('');
+        const btn = (act, p, label, extra = '') =>
+            `<button type="button" class="btn secondary-btn ov-act${extra}" data-kind="profile" data-act="${act}" data-user="${ovEsc(p.username)}">${label}</button>`;
+        const rows = profiles.map(p => `<tr${p.state !== 'visible' ? ' class="ov-excluded"' : ''}>
+            <td><input type="checkbox" class="ov-pick" data-kind="profile" data-code="${ovEsc(p.username)}" aria-label="Select ${ovEsc(p.username)}"${overviewSelProfiles.has(p.username) ? ' checked' : ''}></td>
+            <td>${ovEsc(p.username)}</td><td>${ovEsc(p.role)}</td><td>${p.pinned ? 'yes' : ''}</td>
+            <td class="ov-state-${ovEsc(p.state)}">${ovEsc(p.state)}</td>
+            <td class="ov-num">${ovNum(p.posts)}</td><td class="ov-num">${ovNum(p.videos)}</td>
+            <td class="ov-actions-cell">${p.state === 'hidden' ? btn('unhide', p, 'Unhide') : btn('hide', p, 'Hide')}${btn('remove', p, 'Remove', ' delete')}</td></tr>`).join('');
+        return `<div class="ov-bulk-bar">${cap}${box}
+                <label><input type="checkbox" id="ov-select-all-profiles"${allTicked ? ' checked' : ''}> Select all listed (${ovEsc(profiles.length)})</label>
+                <span>${ovEsc(n)} selected</span>${bulk}</div>
+            <table class="ov-table"><thead><tr><th></th><th>Profile</th><th>Role</th><th>Pinned</th><th>State</th><th class="ov-num">Visible posts</th><th class="ov-num">Visible videos</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
     // Creators tab: posts per creator in this project, split by state, with the per-creator actions.

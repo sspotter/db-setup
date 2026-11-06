@@ -18,6 +18,7 @@ const AUDIT_ACTIONS = [
     'project_delete',
     'project_posts_hide', 'project_posts_unhide', 'project_posts_delete', 'project_posts_restore',
     'project_creator_remove',
+    'project_videos_hide', 'project_videos_unhide', 'project_profiles_hide', 'project_profiles_unhide',
     'admin_account_create', 'admin_account_update', 'admin_account_delete',
     'ip_block', 'ip_unblock',
 ];

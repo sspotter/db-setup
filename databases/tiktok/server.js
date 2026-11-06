@@ -20,6 +20,7 @@ const adminRoutes = require('./routes/admin');
 const adminInsightsRoutes = require('./routes/adminInsights');
 const adminProjectsRoutes = require('./routes/adminProjects');
 const adminProjectPostsRoutes = require('./routes/adminProjectPosts');
+const adminProjectDataRoutes = require('./routes/adminProjectData');
 const adminAuditRoutes = require('./routes/adminAudit');
 const adminUserOverviewRoutes = require('./routes/adminUserOverview');
 const adminUsageRoutes = require('./routes/adminUsage');
@@ -51,6 +52,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminInsightsRoutes);
 app.use('/api/admin', adminProjectsRoutes);
 app.use('/api/admin', adminProjectPostsRoutes);
+app.use('/api/admin', adminProjectDataRoutes);
 app.use('/api/admin', adminAuditRoutes);
 app.use('/api/admin', adminUserOverviewRoutes);
 app.use('/api/admin', adminUsageRoutes);
@@ -86,6 +88,8 @@ if (require.main === module) {
         // with it (EADDRINUSE) and the service crash-loops. Binding specific
         // addresses lets us serve both access paths at once:
         //   - 127.0.0.1   -> the Tailscale Funnel proxy (it dials localhost:8443)
+        //   - ::1         -> "localhost" when a client resolves it to IPv6 first (curl, browsers);
+        //                    without it they get a reset. It does not overlap tailscaled's fd7a:: bind.
         //   - 192.168.1.3 -> the LAN IP that *.medpushmena.com subdomains resolve to
         // while leaving 100.115.149.3:8443 to tailscaled.
         //
@@ -96,7 +100,7 @@ if (require.main === module) {
         };
         const hosts = process.env.HOST
             ? process.env.HOST.split(',').map((s) => s.trim()).filter(Boolean)
-            : ['127.0.0.1', ...Object.values(os.networkInterfaces()).flat()
+            : ['127.0.0.1', '::1', ...Object.values(os.networkInterfaces()).flat()
                 .filter((ni) => ni.family === 'IPv4' && !ni.internal && !inTailscaleRange(ni.address))
                 .map((ni) => ni.address)];
 

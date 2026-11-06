@@ -31,6 +31,7 @@ async function getProjectKeywordSummary(projectId) {
                 SELECT COALESCE(SUM(views_count), 0)
                 FROM tiktok_videos
                 WHERE project_id = $1 AND included_in_reach = true
+                  AND (is_hidden = false OR is_hidden IS NULL)
             ) AS potential_reach
          FROM search_keywords
          WHERE project_id = $1`,
@@ -55,7 +56,7 @@ async function getProjectReachAndStats(projectId) {
     // Basic stats counts
     const basicStatsResult = await pool.query(
         `SELECT
-            (SELECT COUNT(*) FROM project_profiles WHERE project_id = $1) AS profile_count,
+            (SELECT COUNT(*) FROM project_profiles WHERE project_id = $1 AND is_hidden = false) AS profile_count,
             (SELECT COUNT(*) FROM project_posts WHERE project_id = $1 AND is_hidden = false AND deleted_at IS NULL) AS post_count,
             (SELECT COUNT(c.*)
              FROM comments c
@@ -94,6 +95,8 @@ async function getProjectReachAndStats(projectId) {
                 ap.username,
                 COUNT(DISTINCT ap.post_shortcode) AS posts_involved
             FROM all_partners ap
+            WHERE NOT EXISTS (SELECT 1 FROM project_profiles hp
+                               WHERE hp.project_id = $1 AND hp.username = ap.username AND hp.is_hidden = true)
             GROUP BY ap.username
         ),
         partner_details AS (
@@ -187,7 +190,7 @@ router.get('/projects', async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT p.*,
-                    (SELECT COUNT(*) FROM project_profiles pp WHERE pp.project_id = p.id) AS profile_count,
+                    (SELECT COUNT(*) FROM project_profiles pp WHERE pp.project_id = p.id AND pp.is_hidden = false) AS profile_count,
                     (SELECT COUNT(*) FROM project_posts ppo WHERE ppo.project_id = p.id AND ppo.is_hidden = false AND ppo.deleted_at IS NULL) AS post_count,
                     (SELECT COUNT(DISTINCT sub.shortcode)
                      FROM posts sub
@@ -344,7 +347,7 @@ router.get('/projects/:id/profiles', async (req, res) => {
                     ) AS post_count
              FROM project_profiles pp
              JOIN ig_users iu ON pp.username = iu.username
-             WHERE pp.project_id = $1
+             WHERE pp.project_id = $1 AND pp.is_hidden = false
              ORDER BY pp.pinned DESC, iu.follower_count DESC`,
             [id]
         );

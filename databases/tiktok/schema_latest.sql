@@ -209,7 +209,9 @@ CREATE TABLE public.project_profiles (
     username character varying(255) NOT NULL,
     role character varying(50) DEFAULT 'tracked'::character varying,
     added_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    pinned boolean DEFAULT false
+    pinned boolean DEFAULT false,
+    is_hidden boolean DEFAULT false NOT NULL,
+    hidden_at timestamp with time zone
 );
 
 
@@ -886,6 +888,13 @@ CREATE INDEX idx_project_posts_hidden ON public.project_posts USING btree (proje
 --
 
 CREATE INDEX idx_project_profiles_project ON public.project_profiles USING btree (project_id);
+
+
+--
+-- Name: idx_project_profiles_hidden; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_profiles_hidden ON public.project_profiles USING btree (project_id) WHERE (is_hidden = true);
 
 
 --

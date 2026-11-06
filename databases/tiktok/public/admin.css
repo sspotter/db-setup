@@ -1093,3 +1093,11 @@ select option {
 .ov-state-hidden { color: #f59e0b; }
 .ov-state-deleted { color: var(--danger); }
 .ov-actions-cell { white-space: nowrap; }
+.ov-kw-row { cursor: pointer; }
+.ov-kw-row:hover td { background: rgba(99, 102, 241, 0.12); }
+.ov-drift { color: #f59e0b; }
+.ov-caption { max-width: 280px; overflow-wrap: anywhere; }
+.ov-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border: 1px solid var(--accent, #6366f1); border-radius: 12px; color: var(--text-primary); }
+.ov-chip-x { background: transparent; border: 0; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; }
+.ov-chip-x:disabled { opacity: 0.45; cursor: not-allowed; }
+#overview-tab-body { overflow-x: auto; }

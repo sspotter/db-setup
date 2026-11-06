@@ -54,8 +54,9 @@ const postsSql = (withHide) => `
 
 // Same CTEs as getProjectReachAndStats() in routes/projects.js, plus scraped_at and adds.
 // Hidden and soft-deleted project links are excluded, as in the app (skipped only while the
-// project_posts hide columns do not exist yet).
-const creatorsSql = (excludeHidden) => `
+// project_posts hide columns do not exist yet). Profiles hidden for the project
+// (project_profiles.is_hidden, migrations/v12_project_profile_hide.sql) are left out too.
+const creatorsSql = (excludeHidden, excludeHiddenProfiles) => `
     WITH project_posts_cte AS (
         SELECT p.shortcode, p.owner_username
         FROM posts p
@@ -73,7 +74,10 @@ const creatorsSql = (excludeHidden) => `
     ),
     partner_stats AS (
         SELECT ap.username, COUNT(DISTINCT ap.post_shortcode) AS posts_involved
-        FROM all_partners ap GROUP BY ap.username
+        FROM all_partners ap
+        ${excludeHiddenProfiles ? `WHERE NOT EXISTS (SELECT 1 FROM project_profiles hp
+                           WHERE hp.project_id = $1 AND hp.username = ap.username AND hp.is_hidden = true)` : ''}
+        GROUP BY ap.username
     )
     SELECT ps.username, ps.posts_involved,
            COALESCE(MAX(iu.follower_count), 0) AS follower_count,
@@ -88,7 +92,7 @@ const creatorsSql = (excludeHidden) => `
     GROUP BY ps.username, ps.posts_involved, pp.role
     ORDER BY COALESCE(MAX(iu.follower_count), 0) * ps.posts_involved DESC`;
 
-// Exactly getProjectKeywordSummary() in routes/projects.js.
+// Exactly getProjectKeywordSummary() in routes/projects.js (potential_reach skips hidden videos).
 const KEYWORD_SUMMARY_SQL = `
     SELECT COUNT(*) AS total_keywords,
            COALESCE(SUM(total_videos), 0) AS total_videos,
@@ -97,21 +101,31 @@ const KEYWORD_SUMMARY_SQL = `
            COALESCE(SUM(total_engagement), 0) AS total_engagement,
            COUNT(*) FILTER (WHERE status = 'active') AS active_keywords,
            (SELECT COALESCE(SUM(views_count), 0) FROM tiktok_videos
-             WHERE project_id = $1 AND included_in_reach = true) AS potential_reach
+             WHERE project_id = $1 AND included_in_reach = true
+               AND (is_hidden = false OR is_hidden IS NULL)) AS potential_reach
     FROM search_keywords WHERE project_id = $1`;
 
 const KEYWORD_ROWS_SQL = `
     SELECT COALESCE(sk.keyword, '(no keyword)') AS keyword,
-           COUNT(*) AS videos,
-           COUNT(*) FILTER (WHERE tv.included_in_reach) AS reach_videos,
-           COALESCE(SUM(tv.views_count) FILTER (WHERE tv.included_in_reach), 0) AS reach_views,
-           COUNT(*) FILTER (WHERE tv.included_in_reach AND tv.is_hidden) AS hidden_reach_videos,
-           COALESCE(SUM(tv.views_count) FILTER (WHERE tv.included_in_reach AND tv.is_hidden), 0) AS hidden_reach_views
+           COUNT(*) FILTER (WHERE tv.is_hidden = false OR tv.is_hidden IS NULL) AS videos,
+           COALESCE(SUM(tv.views_count) FILTER (WHERE tv.is_hidden = false OR tv.is_hidden IS NULL), 0) AS views,
+           COUNT(*) FILTER (WHERE tv.included_in_reach AND (tv.is_hidden = false OR tv.is_hidden IS NULL)) AS reach_videos,
+           COALESCE(SUM(tv.views_count) FILTER (WHERE tv.included_in_reach AND (tv.is_hidden = false OR tv.is_hidden IS NULL)), 0) AS reach_views,
+           COUNT(*) FILTER (WHERE tv.is_hidden = true) AS hidden_videos
     FROM tiktok_videos tv
     LEFT JOIN search_keywords sk ON sk.id = tv.keyword_id
     WHERE tv.project_id = $1
     GROUP BY sk.keyword
     ORDER BY reach_views DESC`;
+
+// Same query for the project list, with and without the profile hide column (migration v12).
+const projectsSql = (profileHide) => `
+    SELECT pr.id, pr.name, pr.created_at,
+           (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id AND pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS posts,
+           (SELECT count(*) FROM project_profiles pf WHERE pf.project_id = pr.id${profileHide ? ' AND pf.is_hidden = false' : ''})::int AS profiles
+    FROM projects pr
+    WHERE pr.user_id = $1
+    ORDER BY pr.updated_at DESC NULLS LAST, pr.created_at DESC`;
 
 const commentRowsSql = (excludeHidden) => `
     SELECT ppo.post_shortcode AS shortcode, COUNT(c.id) AS stored
@@ -198,15 +212,17 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         if (!userRow) return notFound('User not found');
 
         // ---- projects ---------------------------------------------------------------
-        const projectsResult = await pool.query(
-            `SELECT pr.id, pr.name, pr.created_at,
-                    (SELECT count(*) FROM project_posts pp WHERE pp.project_id = pr.id AND pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS posts,
-                    (SELECT count(*) FROM project_profiles pf WHERE pf.project_id = pr.id)::int AS profiles
-             FROM projects pr
-             WHERE pr.user_id = $1
-             ORDER BY pr.updated_at DESC NULLS LAST, pr.created_at DESC`,
-            [userId]
-        );
+        let profileHide = true;
+        let projectsResult;
+        try {
+            projectsResult = await pool.query(projectsSql(true), [userId]);
+        } catch (err) {
+            if (err.code !== '42703') throw err;
+            profileHide = false; // migrations/v12_project_profile_hide.sql not applied
+            projectsResult = await pool.query(projectsSql(false), [userId]);
+            warn('warn', 'profile_hide_missing',
+                'project_profiles.is_hidden does not exist (apply migrations/v12_project_profile_hide.sql): no profile can be hidden yet.');
+        }
         const projects = projectsResult.rows.map((p) => ({
             id: p.id, name: p.name, created_at: iso(p.created_at), posts: num(p.posts), profiles: num(p.profiles),
         }));
@@ -362,7 +378,7 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
         const allPosts = listedPosts.filter((p) => !isExcluded(p)); // what every total below counts
 
         const [creatorsRes, kwSummaryRes, kwRowsRes, commentRowsRes] = await Promise.all([
-            pool.query(creatorsSql(hideColumns), [selected.id]),
+            pool.query(creatorsSql(hideColumns, profileHide), [selected.id]),
             optional('search_keywords / tiktok_videos', () => pool.query(KEYWORD_SUMMARY_SQL, [selected.id])),
             optional('tiktok_videos', () => pool.query(KEYWORD_ROWS_SQL, [selected.id])),
             optional('comments', () => pool.query(commentRowsSql(hideColumns), [selected.id])),
@@ -503,43 +519,49 @@ router.get('/users/:id/overview', verifyAdmin, async (req, res) => {
                 ['comments.post_shortcode', 'project_posts.post_shortcode'], 'comment_rows');
         }
 
-        // Keyword (tiktok_videos) side
+        // Keyword (tiktok_videos) side. Hidden videos (tiktok_videos.is_hidden) are excluded from
+        // reach, as in the app (getProjectKeywordSummary and the keyword list both skip them).
         if (kwSummaryRes && kwSummaryRes.rows[0]) {
             const s = kwSummaryRes.rows[0];
             const kwRows = kwRowsRes ? kwRowsRes.rows : [];
-            const realVideos = sum(kwRows, (r) => num(r.videos));
-            const hiddenKwViews = sum(kwRows, (r) => num(r.hidden_reach_views));
-            const hiddenKwVideos = sum(kwRows, (r) => num(r.hidden_reach_videos));
+            const liveVideos = sum(kwRows, (r) => num(r.videos));
+            const liveViews = sum(kwRows, (r) => num(r.views));
+            const hiddenKwVideos = sum(kwRows, (r) => num(r.hidden_videos));
             B.keyword_reach = {
-                title: 'Keyword potential reach',
-                explain: 'Per keyword: SUM(tiktok_videos.views_count) WHERE included_in_reach = true. The app (getProjectKeywordSummary) does not look at tiktok_videos.is_hidden, so hidden videos are included.',
+                title: 'Keywords (visible videos)',
+                explain: 'Per keyword, over the tiktok_videos of the project that are NOT hidden (is_hidden). Reach = SUM(views_count) WHERE included_in_reach = true, as getProjectKeywordSummary does. Hide or unhide videos in the Videos tab.',
                 columns: [
-                    { key: 'keyword', label: 'Keyword', numeric: false }, { key: 'videos', label: 'Videos', numeric: true },
-                    { key: 'reach_videos', label: 'Included in reach', numeric: true }, { key: 'reach_views', label: 'Views counted', numeric: true },
-                    { key: 'hidden_reach_videos', label: 'Of which hidden', numeric: true },
+                    { key: 'keyword', label: 'Keyword', numeric: false }, { key: 'videos', label: 'Videos (visible)', numeric: true },
+                    { key: 'views', label: 'Views', numeric: true },
+                    { key: 'reach_videos', label: 'Included in reach', numeric: true }, { key: 'reach_views', label: 'Reach views', numeric: true },
+                    { key: 'hidden_videos', label: 'Hidden', numeric: true },
                 ],
                 rows: kwRows.slice(0, BREAKDOWN_ROWS).map((r) => ({
-                    keyword: r.keyword, videos: num(r.videos), reach_videos: num(r.reach_videos),
-                    reach_views: num(r.reach_views), hidden_reach_videos: num(r.hidden_reach_videos),
+                    keyword: r.keyword, videos: num(r.videos), views: num(r.views), reach_videos: num(r.reach_videos),
+                    reach_views: num(r.reach_views), hidden_videos: num(r.hidden_videos),
                 })),
-                total: { keyword: 'Total', videos: realVideos, reach_videos: sum(kwRows, (r) => num(r.reach_videos)), reach_views: sum(kwRows, (r) => num(r.reach_views)), hidden_reach_videos: hiddenKwVideos },
+                total: { keyword: 'Total', videos: liveVideos, views: liveViews, reach_videos: sum(kwRows, (r) => num(r.reach_videos)), reach_views: sum(kwRows, (r) => num(r.reach_views)), hidden_videos: hiddenKwVideos },
             };
-            metric('keyword_videos', 'Keyword videos', num(s.total_videos),
-                'SUM(search_keywords.total_videos) (a stored counter per keyword, not a live count)',
-                ['search_keywords.total_videos'], 'keyword_reach', { hidden_included: hiddenKwVideos });
-            metric('keyword_views', 'Keyword views', num(s.total_views),
+            metric('keyword_videos_live', 'Keyword videos (visible)', liveVideos,
+                'COUNT(*) FROM tiktok_videos WHERE project_id = :project AND is_hidden is not true (live count)',
+                ['tiktok_videos.project_id', 'tiktok_videos.is_hidden'], 'keyword_reach');
+            metric('keyword_views_live', 'Keyword views', liveViews,
+                'SUM(tiktok_videos.views_count) WHERE project_id = :project AND is_hidden is not true',
+                ['tiktok_videos.views_count', 'tiktok_videos.is_hidden'], 'keyword_reach');
+            metric('keyword_potential_reach', 'Keyword potential reach (visible, included_in_reach)', num(s.potential_reach),
+                'SUM(tiktok_videos.views_count) WHERE project_id = :project AND included_in_reach = true AND is_hidden is not true (as getProjectKeywordSummary)',
+                ['tiktok_videos.views_count', 'tiktok_videos.included_in_reach', 'tiktok_videos.is_hidden'], 'keyword_reach');
+            metric('keyword_videos', 'Keyword videos (stored counter)', num(s.total_videos),
+                'SUM(search_keywords.total_videos) (a stored counter per keyword, not a live count; refreshed when a video is hidden)',
+                ['search_keywords.total_videos'], 'keyword_reach');
+            metric('keyword_views', 'Keyword views (stored counter)', num(s.total_views),
                 'SUM(search_keywords.total_views) (a stored counter per keyword)', ['search_keywords.total_views'], 'keyword_reach');
-            metric('keyword_potential_reach', 'Keyword potential reach', num(s.potential_reach),
-                'SUM(tiktok_videos.views_count) WHERE project_id = :project AND included_in_reach = true',
-                ['tiktok_videos.views_count', 'tiktok_videos.included_in_reach'], 'keyword_reach',
-                { hidden_included: hiddenKwVideos, value_without_hidden: num(s.potential_reach) - hiddenKwViews });
             if (hiddenKwVideos > 0) {
-                warn('warn', 'hidden_counted_keyword_potential_reach',
-                    `${hiddenKwVideos} hidden keyword video(s) are counted in Keyword potential reach (${hiddenKwViews} of ${num(s.potential_reach)} views).`);
+                warn('info', 'hidden_keyword_videos', `${hiddenKwVideos} hidden keyword video(s) are excluded from the keyword totals (the user's app excludes them too).`);
             }
-            if (kwRowsRes && realVideos !== num(s.total_videos)) {
+            if (kwRowsRes && liveVideos !== num(s.total_videos)) {
                 warn('warn', 'keyword_counter_drift',
-                    `search_keywords.total_videos sums to ${num(s.total_videos)} but tiktok_videos has ${realVideos} row(s) for this project.`);
+                    `search_keywords.total_videos sums to ${num(s.total_videos)} but the project has ${liveVideos} visible keyword video(s).`);
             }
         }
 

@@ -4,7 +4,7 @@
  *
  *   GET  /api/admin/users/:userId/projects/:projectId/creators
  *   POST /api/admin/users/:userId/projects/:projectId/posts/action
- *   POST /api/admin/users/:userId/projects/:projectId/profiles/remove
+ *   POST /api/admin/users/:userId/projects/:projectId/profiles/remove   (username, or usernames[] up to 200)
  *
  * Same semantics as the user's own routes (routes/posts.js PATCH /posts/:shortcode/hide and
  * DELETE /posts/:shortcode): the state lives on the project_posts LINK of this project, never
@@ -31,6 +31,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_SHORTCODES = 5000;
 const MAX_SHORTCODE_LENGTH = 255; // posts.shortcode is varchar(255)
 const MAX_USERNAME_LENGTH = 255;
+const MAX_REMOVE_USERNAMES = 200; // bulk remove runs a few queries per username
 const SAMPLE_SIZE = 10;
 const AUDIT_SHORTCODES = 20;
 
@@ -280,8 +281,25 @@ router.post('/users/:userId/projects/:projectId/profiles/remove', verifyAdmin, a
     if (!UUID.test(userId) || !UUID.test(projectId)) return bad(res, 'Invalid id');
     const body = req.body || {};
 
-    const username = readUsername(body.username);
-    if (!username) return bad(res, 'username is required');
+    // One username, or usernames[] for a bulk remove (same contract, the counts are totals).
+    let names;
+    if (body.usernames !== undefined && body.usernames !== null) {
+        if (!Array.isArray(body.usernames) || body.usernames.length === 0 || body.usernames.length > MAX_REMOVE_USERNAMES) {
+            return bad(res, `usernames must be an array of 1 to ${MAX_REMOVE_USERNAMES} usernames`);
+        }
+        const seen = new Map();
+        for (const raw of body.usernames) {
+            const n = readUsername(raw);
+            if (!n) return bad(res, 'Each username must be a non-empty string');
+            if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+        }
+        names = [...seen.values()];
+    } else {
+        const one = readUsername(body.username);
+        if (!one) return bad(res, 'username is required');
+        names = [one];
+    }
+    const username = names.length === 1 ? names[0] : `${names.length} profiles`;
     if (body.with_posts !== undefined && typeof body.with_posts !== 'boolean') return bad(res, 'with_posts must be true or false');
     const withPosts = body.with_posts === true;
     const dry = readDryRun(body);
@@ -300,14 +318,19 @@ router.post('/users/:userId/projects/:projectId/profiles/remove', verifyAdmin, a
             return { rollback: true };
         }
         // affected = the posts that would be soft-deleted (0 when the posts are kept).
-        const links = withPosts
-            ? await selectLinks(client, projectId, ACTIONS.delete.where, { creator: username }, !dryRun)
-            : [];
-        const profileRows = (await client.query(
-            `SELECT id FROM project_profiles WHERE project_id = $1 AND lower(username) = lower($2)
-             ${dryRun ? '' : 'FOR UPDATE'}`,
-            [projectId, username]
-        )).rows.length;
+        const linkSet = new Set();
+        let profileRows = 0;
+        for (const name of names) {
+            if (withPosts) {
+                for (const code of await selectLinks(client, projectId, ACTIONS.delete.where, { creator: name }, !dryRun)) linkSet.add(code);
+            }
+            profileRows += (await client.query(
+                `SELECT id FROM project_profiles WHERE project_id = $1 AND lower(username) = lower($2)
+                 ${dryRun ? '' : 'FOR UPDATE'}`,
+                [projectId, name]
+            )).rows.length;
+        }
+        const links = [...linkSet].sort();
 
         if (dryRun) {
             res.json({ success: true, dry_run: true, action: 'remove', affected: links.length, profile_rows: profileRows, creator: username, with_posts: withPosts, sample: links.slice(0, SAMPLE_SIZE) });
@@ -318,10 +341,12 @@ router.post('/users/:userId/projects/:projectId/profiles/remove', verifyAdmin, a
             return { rollback: true };
         }
         if (links.length > 0) await applyAction(client, projectId, 'delete', links);
-        await client.query(
-            'DELETE FROM project_profiles WHERE project_id = $1 AND lower(username) = lower($2)',
-            [projectId, username]
-        );
+        for (const name of names) {
+            await client.query(
+                'DELETE FROM project_profiles WHERE project_id = $1 AND lower(username) = lower($2)',
+                [projectId, name]
+            );
+        }
         return { project, links, profileRows };
     });
     if (!outcome || outcome.rollback) return;
@@ -332,11 +357,18 @@ router.post('/users/:userId/projects/:projectId/profiles/remove', verifyAdmin, a
         action: 'project_creator_remove', target_user_id: userId, target_email: project.email,
         detail: {
             project_id: projectId, project_name: project.name, creator: username,
+            usernames: names.length > 1 ? names.slice(0, AUDIT_SHORTCODES) : undefined,
             with_posts: withPosts, affected: links.length, profile_rows: profileRows,
             shortcodes: links.slice(0, AUDIT_SHORTCODES),
         },
     });
     res.json({ success: true, dry_run: false, action: 'remove', affected: links.length, profile_rows: profileRows });
 });
+
+// Shared with routes/adminProjectData.js (same contract helpers, one place).
+router.helpers = {
+    ACTIONS, UUID, SAMPLE_SIZE, AUDIT_SHORTCODES, bad, readDryRun, readUsername, readExpectCount,
+    withTransaction, findProject, applyAction,
+};
 
 module.exports = router;
