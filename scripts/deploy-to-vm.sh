@@ -94,11 +94,18 @@ remote "git apply --check /tmp/db-setup-pending.patch" || { remote 'rm -f /tmp/d
 echo "OK  patch applies cleanly on the VM"
 if [ "$DRY" = 1 ]; then remote 'rm -f /tmp/db-setup-pending.patch'; echo "Dry run: nothing was changed on the VM."; exit 0; fi
 
-# ---- migrations (only with --migrate), BEFORE the new code starts
+# ---- backup first (only with --migrate). The migrations themselves run AFTER the code is applied,
+#      because the migration files arrive with the patch.
 if [ "$MIGRATE" = 1 ]; then
   echo "== backing up both databases first"
   remote './scripts/backup-db.sh all' || { remote 'rm -f /tmp/db-setup-pending.patch'; echo "STOP: backup failed, nothing applied"; exit 1; }
-  ssh -o BatchMode=yes "$VM" "cd \"\$HOME/$VM_DIR\" && bash -s" <<'REMOTE'
+fi
+
+echo "== applying the code"
+remote "git apply /tmp/db-setup-pending.patch && mv /tmp/db-setup-pending.patch $PATCH_ON_VM"
+if [ "$MIGRATE" = 1 ]; then
+  echo "== applying pending migrations (services still run the old code)"
+  if ! ssh -o BatchMode=yes "$VM" "cd \"\$HOME/$VM_DIR\" && bash -s" <<'REMOTE'
 set -euo pipefail
 url_of() { grep -E '^LOCAL_DATABASE_URL=' "databases/$1/.env" | cut -d= -f2- | tr -d '"'; }
 has_table()  { psql "$1" -Atc "select to_regclass('public.$2') is not null" | grep -q t; }
@@ -119,10 +126,12 @@ for db in tiktok instagram; do
   else printf '\nADMIN_JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> "databases/$db/.env"; echo "   ADMIN_JWT_SECRET added to $db/.env"; fi
 done
 REMOTE
+then
+    echo "STOP: a migration failed. The code is applied but the services were NOT restarted (they still run the old code)."
+    echo "Fix the error above and re-run, or undo the code: ./scripts/deploy-to-vm.sh --rollback"
+    exit 1
+  fi
 fi
-
-echo "== applying the code"
-remote "git apply /tmp/db-setup-pending.patch && mv /tmp/db-setup-pending.patch $PATCH_ON_VM"
 restart_and_check
 echo
 echo "Deployed $HEAD_SHA (VM base was $BASE) as uncommitted changes on the VM."
