@@ -41,7 +41,7 @@ git check-ignore -q "$OUT/x" || { echo "STOP: $OUT/ is not git-ignored; add it t
 docker info >/dev/null 2>&1 || { echo "STOP: Docker is not running"; exit 1; }
 remote() { ssh -o BatchMode=yes "$VM" "cd \"\$HOME/$VM_DIR\" && $*"; }
 
-if [ "$USE_LATEST" = 0 ]; then echo "== taking fresh verified backups on the VM (read-only)"; remote './scripts/backup-db.sh all'; fi
+if [ "$USE_LATEST" = 0 ]; then echo "== taking fresh verified backups on the VM (read-only)"; remote 'bash ./scripts/backup-db.sh all'; fi
 
 mkdir -p "$OUT"; chmod 700 "$OUT" 2>/dev/null || true
 PGMAJOR=""

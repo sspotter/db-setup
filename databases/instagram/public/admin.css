@@ -1084,3 +1084,5 @@ td.ov-num, th.ov-num { text-align: right; font-variant-numeric: tabular-nums; }
 .ov-state-hidden { border-color: var(--warning); color: var(--warning); }
 .ov-state-deleted { border-color: var(--danger); color: var(--danger); }
 button:disabled.ov-act, button:disabled.ov-small { opacity: 0.5; cursor: not-allowed; }
+
+.ov-search { width: 100%; max-width: 420px; margin: 4px 0 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, #444); background: transparent; color: inherit; font: inherit; }

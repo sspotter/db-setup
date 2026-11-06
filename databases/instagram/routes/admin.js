@@ -220,7 +220,9 @@ router.get('/events', verifyAdmin, async (req, res) => {
 
         const [events, stats] = await Promise.all([
             pool.query(
-                `SELECT id, created_at, user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error
+                `SELECT id, created_at, user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error, detail,
+                        COALESCE(detail->>'project_name',
+                                 (SELECT pr.name FROM projects pr WHERE pr.id::text = lower(COALESCE(detail->>'project_id', substring(path from '/projects/([0-9a-fA-F-]{36})'))))) AS project_name
                  FROM api_events
                  ${whereSql}
                  ORDER BY created_at DESC

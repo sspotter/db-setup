@@ -138,6 +138,7 @@ router.post('/projects', async (req, res) => {
             [req.user.id, name.trim(), description || null]
         );
 
+        res.locals.activity = { ...res.locals.activity, detail: { project_id: result.rows[0].id, project_name: result.rows[0].name, action: 'project created' } };
         res.status(201).json({ success: true, project: result.rows[0] });
     } catch (err) {
         console.error('[PROJECTS CREATE] Error:', err.message);

@@ -33,17 +33,22 @@ router.post('/posts', platformGuard, async (req, res) => {
         let posts = req.body.posts || [req.body];
         if (!Array.isArray(posts)) posts = [posts];
         const projectId = req.body.project_id || null;
+        let projectName = null;
+        // Rows written per table, for the admin activity log (counts only, no content).
+        const written = { ig_users: 0, post_metrics_history: 0, post_relations: 0, project_posts: 0, project_profiles: 0, user_scraped_posts: 0 };
 
         // Validate project ownership if project_id provided
         if (projectId) {
             const projCheck = await client.query(
-                'SELECT id FROM projects WHERE id = $1 AND user_id = $2',
+                'SELECT id, name FROM projects WHERE id = $1 AND user_id = $2',
                 [projectId, req.user.id]
             );
             if (projCheck.rows.length === 0) {
                 client.release();
+                res.locals.activity = { ...res.locals.activity, detail: { project_id: projectId, posts_sent: posts.length, denied: true } };
                 return res.status(403).json({ success: false, error: 'Project not found or access denied' });
             }
+            projectName = projCheck.rows[0].name;
         }
 
         await client.query('BEGIN');
@@ -72,6 +77,7 @@ router.post('/posts', platformGuard, async (req, res) => {
             const observedAt = toObservedAt(post.observedAt);
 
             if (ownerUsername) {
+                written.ig_users++;
                 await client.query(
                     `INSERT INTO ig_users (id, username, follower_count, is_verified, role, scraped_at, observed_at)
                      VALUES ($1, $2, $3, $4, 'reference', NOW(), $5)
@@ -164,7 +170,7 @@ router.post('/posts', platformGuard, async (req, res) => {
             // One row per observation: re-syncing the same capture adds nothing.
             // Readers pick "latest" by observed_at, so an old copy synced today
             // lands in history without becoming the current number.
-            await client.query(
+            const metricsRes = await client.query(
                 `INSERT INTO post_metrics_history (post_shortcode, likes_count, comments_count, video_view_count, captured_at, observed_at)
                  SELECT $1::varchar, $2::int, $3::int, $4::int, NOW(), $5::timestamptz
                  WHERE $5::timestamptz IS NULL OR NOT EXISTS (
@@ -173,6 +179,7 @@ router.post('/posts', platformGuard, async (req, res) => {
                  )`,
                 [post.shortcode, likesCount, commentsCount, viewCount, observedAt]
             );
+            written.post_metrics_history += metricsRes.rowCount || 0;
 
             // --- 4. Upsert relations ---
             const relations = [];
@@ -209,6 +216,7 @@ router.post('/posts', platformGuard, async (req, res) => {
             }
 
             for (const rel of relations) {
+                written.ig_users++;
                 await client.query(
                     // Not stamped with observedAt: coauthor follower counts are often
                     // backfilled locally from older posts, so they never override a
@@ -222,7 +230,7 @@ router.post('/posts', platformGuard, async (req, res) => {
                     [String(rel.id), rel.username, Number(rel.follower_count) || 0, rel.is_verified]
                 );
 
-                await client.query(
+                const relRes = await client.query(
                     `INSERT INTO post_relations (post_shortcode, username, relation_type)
                      SELECT CAST($1 as VARCHAR), CAST($2 as VARCHAR), CAST($3 as VARCHAR)
                      WHERE NOT EXISTS (
@@ -231,6 +239,7 @@ router.post('/posts', platformGuard, async (req, res) => {
                      )`,
                     [post.shortcode, rel.username, rel.type]
                 );
+                written.post_relations += relRes.rowCount || 0;
             }
 
             // --- 5. Link post + owner to project ---
@@ -238,12 +247,13 @@ router.post('/posts', platformGuard, async (req, res) => {
                 // An existing link is left exactly as it is (DO NOTHING): a link an admin hid or
                 // soft-deleted stays hidden/deleted when the user saves the same post again, and no
                 // duplicate row is created (UNIQUE project_id + post_shortcode).
-                await client.query(
+                const linkRes = await client.query(
                     `INSERT INTO project_posts (project_id, post_shortcode, added_at)
                      VALUES ($1, $2, NOW())
                      ON CONFLICT (project_id, post_shortcode) DO NOTHING`,
                     [projectId, post.shortcode]
                 );
+                written.project_posts += linkRes.rowCount || 0;
                 const linkState = await client.query(
                     'SELECT deleted_at FROM project_posts WHERE project_id = $1 AND post_shortcode = $2',
                     [projectId, post.shortcode]
@@ -253,23 +263,25 @@ router.post('/posts', platformGuard, async (req, res) => {
 
                 // Also link owner profile to project
                 if (ownerUsername && !linkDeleted) {
-                    await client.query(
+                    const profRes = await client.query(
                         `INSERT INTO project_profiles (project_id, username)
                          VALUES ($1, $2)
                          ON CONFLICT (project_id, username) DO NOTHING`,
                         [projectId, ownerUsername]
                     );
+                    written.project_profiles += profRes.rowCount || 0;
                 }
 
                 // Link collaborator profiles to project
                 for (const rel of relations) {
                     if (rel.type === 'COAUTHOR' && !linkDeleted) {
-                        await client.query(
+                        const collabRes = await client.query(
                             `INSERT INTO project_profiles (project_id, username)
                              VALUES ($1, $2)
                              ON CONFLICT (project_id, username) DO NOTHING`,
                             [projectId, rel.username]
                         );
+                        written.project_profiles += collabRes.rowCount || 0;
                     }
                 }
             }
@@ -277,12 +289,13 @@ router.post('/posts', platformGuard, async (req, res) => {
             // --- 6. Backward compat: also link to user_scraped_posts (if table exists) ---
             if (req.user && req.user.id) {
                 try {
-                    await client.query(
+                    const uspRes = await client.query(
                         `INSERT INTO user_scraped_posts (user_id, post_shortcode, scraped_at)
                          VALUES ($1, $2, NOW())
                          ON CONFLICT (user_id, post_shortcode) DO UPDATE SET scraped_at = NOW()`,
                         [req.user.id, post.shortcode]
                     );
+                    written.user_scraped_posts += uspRes.rowCount || 0;
                 } catch (_) {
                     // Table may not exist if already dropped — ignore
                 }
@@ -297,6 +310,25 @@ router.post('/posts', platformGuard, async (req, res) => {
         }
 
         await client.query('COMMIT');
+
+        // Project size after this save (visible posts), for the admin activity log. Best effort.
+        let projectTotal = null;
+        if (projectId) {
+            try {
+                const t = await client.query(
+                    'SELECT count(*)::int AS n FROM project_posts WHERE project_id = $1 AND is_hidden = false AND deleted_at IS NULL',
+                    [projectId]
+                );
+                projectTotal = t.rows[0] && t.rows[0].n;
+            } catch (_) { /* detail only */ }
+        }
+        res.locals.activity = {
+            ...res.locals.activity,
+            detail: {
+                project_id: projectId, project_name: projectName, posts_sent: posts.length,
+                inserted, updated, skipped, rows_written: written, project_total_posts: projectTotal,
+            },
+        };
 
         res.json({
             success: true,

@@ -136,7 +136,7 @@ describe('admin project posts', () => {
         it('defaults to a dry run: previews, changes nothing, commits nothing', async () => {
             const res = await post('posts/action', { action: 'hide', creator: '@Jysk.ma' });
             expect(res.status).toBe(200);
-            expect(res.body).toEqual({ success: true, dry_run: true, action: 'hide', affected: 3, creator: 'Jysk.ma', sample: ['a', 'b', 'c'] });
+            expect(res.body).toEqual({ success: true, dry_run: true, action: 'hide', affected: 3, creator: 'Jysk.ma', include_tagged: false, sample: ['a', 'b', 'c'] });
             const sqls = clientSql();
             expect(sqls.some((s) => /^\s*(UPDATE|DELETE|INSERT)/.test(s))).toBe(false);
             expect(sqls).toContain('ROLLBACK');
@@ -330,6 +330,23 @@ describe('admin project posts', () => {
         });
     });
 
+    describe('include_tagged', () => {
+        it('matches tagged / co-author accounts only when asked, with the name as a bind parameter', async () => {
+            await post('posts/action', { action: 'hide', creator: 'jysk.ma', include_tagged: true });
+            const sql = clientSql().find((q) => /array_agg/.test(q));
+            expect(sql).toMatch(/post_relations/);
+            expect(client.query.mock.calls.find((c) => /array_agg/.test(sqlOf(c)))[1]).toEqual([PROJ, 'jysk.ma']);
+            client.query.mockClear();
+            await post('posts/action', { action: 'hide', creator: 'jysk.ma' });
+            expect(clientSql().find((q) => /array_agg/.test(q))).not.toMatch(/post_relations/);
+        });
+
+        it('rejects a non-boolean include_tagged', async () => {
+            const res = await post('posts/action', { action: 'hide', creator: 'x', include_tagged: 'yes' });
+            expect(res.status).toBe(400);
+        });
+    });
+
     describe('GET creators', () => {
         it('checks ownership then returns per-creator counts', async () => {
             pool.query
@@ -339,7 +356,8 @@ describe('admin project posts', () => {
             expect(res.status).toBe(200);
             expect(res.body).toEqual({ success: true, creators: [{ username: 'jysk.ma', role: 'tracked', visible: 2, hidden: 3, deleted: 1 }] });
             expect(pool.query.mock.calls[0][1]).toEqual([PROJ, USER]);
-            expect(sqlOf(pool.query.mock.calls[1])).toMatch(/pp\.deleted_at IS NOT NULL/);
+            expect(sqlOf(pool.query.mock.calls[1])).toMatch(/deleted_at IS NOT NULL/);
+            expect(sqlOf(pool.query.mock.calls[1])).toMatch(/relation_type IN \('COAUTHOR', 'CAPTION_USER'\)/);
         });
 
         it('404s for a project of another user', async () => {

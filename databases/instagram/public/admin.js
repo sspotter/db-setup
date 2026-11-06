@@ -634,6 +634,30 @@ document.addEventListener('DOMContentLoaded', () => {
         return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
     }
 
+    // "What did this request do": project, posts saved and rows written per table (ev.detail, set by the routes).
+    function eventSavedHtml(ev) {
+        const d = ev.detail && typeof ev.detail === 'object' ? ev.detail : null;
+        const field = (label, value, full) => `<div class="activity-detail${full ? ' activity-detail-full' : ''}"><span class="detail-label">${esc(label)}</span><span class="detail-value">${esc(value)}</span></div>`;
+        const projectName = ev.project_name || (d && d.project_name) || null;
+        const projectId = (d && d.project_id) || ((String(ev.path || '').match(/\/projects\/([0-9a-f-]{36})/i) || [])[1]) || null;
+        let html = '';
+        if (projectName || projectId) html += field('Project', projectName ? `${projectName}${projectId ? ' (' + projectId + ')' : ''}` : projectId, true);
+        if (!d) return html;
+        if (d.posts_sent !== undefined) {
+            let line = `${d.posts_sent} sent: ${d.inserted || 0} new, ${d.updated || 0} updated, ${d.skipped || 0} skipped`;
+            if (d.denied) line = `${d.posts_sent} sent: refused (project not found or not theirs)`;
+            html += field('Posts saved', line, true);
+        }
+        if (d.comments_sent !== undefined) html += field('Comments saved', `${d.comments_sent} sent for post ${d.post_shortcode}: ${d.inserted || 0} new, ${d.updated || 0} updated`, true);
+        if (d.project_total_posts !== null && d.project_total_posts !== undefined) html += field('Project total after save', `${d.project_total_posts} visible posts`);
+        if (d.action) html += field('Action', d.action);
+        if (d.rows_written && typeof d.rows_written === 'object') {
+            const parts = Object.entries(d.rows_written).map(([t, n]) => `${t}: ${n}`);
+            if (parts.length) html += field('Rows written per table', parts.join('  |  '), true);
+        }
+        return html;
+    }
+
     function renderEventRow(ev) {
         const id = String(ev.id);
         const expanded = expandedEventIds.has(id);
@@ -668,6 +692,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>
                 <div class="activity-details${expanded ? '' : ' hidden'}">
                     <div class="activity-detail-grid">
+                        ${eventSavedHtml(ev)}
                         <div class="activity-detail"><span class="detail-label">Time</span><span class="detail-value">${esc(created ? created.toLocaleString() : '—')}</span></div>
                         <div class="activity-detail"><span class="detail-label">Method + Path</span><span class="detail-value">${esc(ev.method || '')} ${esc(ev.path || '')}</span></div>
                         <div class="activity-detail"><span class="detail-label">Status</span><span class="detail-value">${esc(ev.status)}</span></div>
@@ -1682,7 +1707,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await adminGet(`/api/admin/users/${encodeURIComponent(ovUser.id)}/overview${q}`);
             if (mine !== ovRequest) return;
             ovData = data;
-            ovCreators = null;
+            ovCreators = null; ovCreatorFilter = "";
             ovSelected.clear();
             ovHideConfirm();
             renderOverview();
@@ -1799,6 +1824,33 @@ document.addEventListener('DOMContentLoaded', () => {
             `<table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
     }
 
+    let ovCreatorFilter = '';
+
+    // The rows of the creators table, narrowed by the search box (case-insensitive, with or without @).
+    function ovCreatorTableHtml() {
+        const rows0 = ovCreators.rows;
+        const q = ovCreatorFilter.trim().replace(/^@/, '').toLowerCase();
+        const list = q ? rows0.filter(r => String(r.username).toLowerCase().includes(q)) : rows0;
+        if (!list.length) return `<p class="ov-muted">No creator or tagged account matches "${esc(ovCreatorFilter.trim())}".</p>`;
+        const btn = (act, label, user, zero) => `<button type="button" class="btn ${act === 'remove' || act === 'delete' ? 'danger-btn' : 'btn-secondary'} ov-small ov-act" data-creator-act="${esc(act)}" data-user="${esc(user)}" data-zero="${zero ? '1' : '0'}">${esc(label)}</button>`;
+        const rows = list.map(r => {
+            const v = Number(r.visible) || 0, h = Number(r.hidden) || 0, x = Number(r.deleted) || 0, own = Number(r.owned) || 0;
+            const tagged = v + h + x - own;
+            return `<tr><td>@${esc(r.username)}</td><td>${esc(r.role)}</td><td class="ov-num">${esc(v)}</td><td class="ov-num">${esc(h)}</td><td class="ov-num">${esc(x)}</td>` +
+                `<td class="ov-num" title="Posts they own / posts owned by others that tag or co-author them">${esc(own)} / ${esc(Math.max(tagged, 0))}</td>` +
+                `<td>${btn('hide', 'Hide', r.username, v === 0)}${btn('unhide', 'Unhide', r.username, h === 0)}${btn('delete', 'Delete', r.username, v + h === 0)}${btn('remove', 'Remove creator', r.username, false)}</td></tr>`;
+        }).join('');
+        return '<table><thead><tr><th>Creator</th><th>Role</th><th class="ov-num">Visible</th><th class="ov-num">Hidden</th><th class="ov-num">Deleted</th><th class="ov-num">Own / tagged</th><th>Actions</th></tr></thead>' +
+            `<tbody>${rows}</tbody></table>`;
+    }
+
+    function ovWireCreatorButtons() {
+        ovEls.tabBody.querySelectorAll('[data-creator-act]').forEach(b => b.addEventListener('click', () => {
+            ovCreatorAction(b.getAttribute('data-creator-act'), b.getAttribute('data-user'));
+        }));
+        ovSetBusy(ovBusy);
+    }
+
     function ovCreatorsHtml(d) {
         const c = (key, label, numeric = false) => ({ key, label, numeric });
         let html;
@@ -1809,23 +1861,22 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (!ovCreators.rows.length) {
             html = '<p class="ov-muted">No creators in this project.</p>';
         } else {
-            const btn = (act, label, user, zero) => `<button type="button" class="btn ${act === 'remove' || act === 'delete' ? 'danger-btn' : 'btn-secondary'} ov-small ov-act" data-creator-act="${esc(act)}" data-user="${esc(user)}" data-zero="${zero ? '1' : '0'}">${esc(label)}</button>`;
-            const rows = ovCreators.rows.map(r => {
-                const v = Number(r.visible) || 0, h = Number(r.hidden) || 0, x = Number(r.deleted) || 0;
-                return `<tr><td>@${esc(r.username)}</td><td>${esc(r.role)}</td><td class="ov-num">${esc(v)}</td><td class="ov-num">${esc(h)}</td><td class="ov-num">${esc(x)}</td>` +
-                    `<td>${btn('hide', 'Hide', r.username, v === 0)}${btn('unhide', 'Unhide', r.username, h === 0)}${btn('delete', 'Delete', r.username, v + h === 0)}${btn('remove', 'Remove creator', r.username, false)}</td></tr>`;
-            }).join('');
-            html = '<table><thead><tr><th>Creator</th><th>Role</th><th class="ov-num">Visible</th><th class="ov-num">Hidden</th><th class="ov-num">Deleted</th><th>Actions</th></tr></thead>' +
-                `<tbody>${rows}</tbody></table>`;
+            html = `<input type="search" id="ov-creator-search" class="ov-search" placeholder="Search a creator or tagged account (e.g. jysk)" value="${esc(ovCreatorFilter)}" autocomplete="off">` +
+                '<p class="ov-muted">Hide, Unhide and Delete act on every post of this project the account owns or is tagged / co-author on, after a preview with the exact count.</p>' +
+                `<div id="ov-creator-table">${ovCreatorTableHtml()}</div>`;
         }
         return html + '<h4>Reach per creator (visible posts only)</h4>' +
             ovTable([c('username', 'Creator'), c('role', 'Role'), c('follower_count', 'Followers', true), c('posts', 'Posts', true), c('adds', 'Adds', true), c('scraped_at', 'scraped_at'), c('observed_at', 'observed_at')], d.creators, null);
     }
 
     function ovWireTab() {
-        ovEls.tabBody.querySelectorAll('[data-creator-act]').forEach(b => b.addEventListener('click', () => {
-            ovCreatorAction(b.getAttribute('data-creator-act'), b.getAttribute('data-user'));
-        }));
+        ovWireCreatorButtons();
+        const search = document.getElementById('ov-creator-search');
+        if (search) search.addEventListener('input', () => {
+            ovCreatorFilter = search.value;
+            document.getElementById('ov-creator-table').innerHTML = ovCreatorTableHtml();
+            ovWireCreatorButtons();
+        });
         ovEls.tabBody.querySelectorAll('[data-bulk]').forEach(b => b.addEventListener('click', () => ovBulkAction(b.getAttribute('data-bulk'))));
         const picks = ovEls.tabBody.querySelectorAll('.ov-pick');
         picks.forEach(p => p.addEventListener('change', () => {
@@ -1955,8 +2006,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const v = OV_VERBS[action];
         if (!v) return;
         ovRunAction({
-            path: 'posts/action', body: { action, creator: user }, typeDelete: action === 'delete', confirmLabel: v.verb,
-            question: (n) => `${v.verb} ${plural(n, 'post')} by @${user} in '${pn}'?`,
+            path: 'posts/action', body: { action, creator: user, include_tagged: true }, typeDelete: action === 'delete', confirmLabel: v.verb,
+            question: (n) => `${v.verb} ${plural(n, 'post')} by or tagging @${user} in '${pn}'?`,
             empty: `No posts by @${user} in '${pn}' can be ${v.verb.toLowerCase()}d.`,
             hint: action === 'delete' ? 'Soft delete: the post links of this project are marked deleted and can be restored; other projects are not affected.' : '',
             done: (r) => `${v.past} ${plural(r.affected, 'post')} by @${user} in '${pn}'`,

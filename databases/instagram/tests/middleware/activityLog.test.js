@@ -38,6 +38,7 @@ app.get('/api/seen', (req, res) => { req.user = { id: SEEN_ID, email: 'seen@exam
 const flush = () => new Promise(setImmediate);
 const insertCalls = () => pool.query.mock.calls.filter(([sql]) => /INSERT INTO api_events/.test(sql));
 
+app.post('/api/detailed', (req, res) => { req.user = { id: '77777777-2222-3333-4444-555555555555', email: 'd@x.com' }; res.locals.activity = { detail: { project_name: 'Sketch', inserted: 2 } }; res.json({ success: true }); });
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/api/admin/events', (req, res) => res.json({ events: [] }));
 app.post('/api/save', (req, res) => { req.user = { id: '88888888-2222-3333-4444-555555555555', email: 'saver@example.com' }; res.json({ success: true }); });
@@ -70,6 +71,23 @@ describe('activityLog middleware', () => {
         expect(params[4]).toBe(401);
         expect(params[5]).toBe('no_such_user');
         expect(params[9]).toBe('1.2.3');
+    });
+
+    it('stores the detail a route sets, and falls back to no detail if the column is missing', async () => {
+        process.env.ACTIVITY_LOG_SUCCESS = 'all';
+        await request(app).post('/api/detailed').send({});
+        await flush();
+        let [sql, params] = insertCalls()[0];
+        expect(sql).toMatch(/detail/);
+        expect(JSON.parse(params[12])).toEqual({ project_name: 'Sketch', inserted: 2 });
+
+        jest.clearAllMocks();
+        pool.query.mockRejectedValueOnce(Object.assign(new Error('no column'), { code: '42703' })).mockResolvedValue({ rows: [] });
+        await request(app).post('/api/detailed').send({});
+        await flush(); await flush();
+        const calls = insertCalls();
+        expect(calls).toHaveLength(2);
+        expect(calls[1][0]).not.toMatch(/detail/);
     });
 
     it('does not record a 2xx on a non-login route', async () => {

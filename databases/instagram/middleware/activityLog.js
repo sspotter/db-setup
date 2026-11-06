@@ -86,10 +86,8 @@ function activityLog(req, res, next) {
         // A route may set res.locals.activity.error to log more detail than the client sees.
         const error = res.statusCode >= 400 ? (act.error || errorText) : null;
 
-        pool.query(
-            `INSERT INTO api_events (user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-            [
+        const detail = act.detail ? JSON.stringify(act.detail).slice(0, 4000) : null;
+        const baseValues = [
                 UUID_RE.test(String(userId)) ? String(userId) : null, // bad decoded ids would fail the uuid cast
                 cut(email, 255),
                 cut(req.method, 10),
@@ -102,8 +100,18 @@ function activityLog(req, res, next) {
                 cut(req.headers['x-extension-version'], 50),
                 durationMs,
                 res.statusCode >= 500 ? cut(act.serverError, 1000) : null,
-            ]
-        ).catch((err) => console.error('[ACTIVITY] Insert failed:', err.message));
+        ];
+        const cols = 'user_id, email, method, path, status, reason, error, ip, user_agent, ext_version, duration_ms, server_error';
+        const ph = '$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12';
+        // A truncated detail is not valid JSON; drop it instead of failing the whole row.
+        let detailJson = null;
+        if (detail) { try { JSON.parse(detail); detailJson = detail; } catch { detailJson = null; } }
+        pool.query(`INSERT INTO api_events (${cols}, detail) VALUES (${ph}, $13::jsonb)`, [...baseValues, detailJson])
+            .catch((err) => {
+                if (err.code !== '42703') throw err; // detail column not migrated yet: log without it
+                return pool.query(`INSERT INTO api_events (${cols}) VALUES (${ph})`, baseValues);
+            })
+            .catch((err) => console.error('[ACTIVITY] Insert failed:', err.message));
     });
 
     next();
@@ -118,7 +126,7 @@ function startRetention() {
 
     (async () => {
         try {
-            for (const f of ['004_add_api_events.sql', '005_add_password_resets.sql', '006_add_diagnostics.sql']) {
+            for (const f of ['004_add_api_events.sql', '005_add_password_resets.sql', '006_add_diagnostics.sql', '007_add_event_detail.sql']) {
                 await pool.query(fs.readFileSync(path.join(__dirname, '../migrations', f), 'utf8'));
             }
         } catch (err) {

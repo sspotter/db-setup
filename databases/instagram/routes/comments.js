@@ -77,6 +77,11 @@ router.post('/comments', async (req, res) => {
 
         await client.query('COMMIT');
 
+        res.locals.activity = {
+            ...res.locals.activity,
+            detail: { post_shortcode, comments_sent: comments.length, inserted, updated, rows_written: { comments: inserted + updated } },
+        };
+
         res.json({
             success: true,
             post_shortcode,

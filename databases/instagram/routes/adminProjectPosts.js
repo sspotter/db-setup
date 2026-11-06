@@ -64,7 +64,8 @@ function parseTarget(body) {
     if (hasCreator) {
         const creator = normUsername(body.creator);
         if (!creator || creator.length > MAX_USERNAME_LEN) throw new HttpError(400, { error: 'Invalid creator' });
-        return { creator, shortcodes: null };
+        if (body.include_tagged !== undefined && typeof body.include_tagged !== 'boolean') throw new HttpError(400, { error: 'include_tagged must be true or false' });
+        return { creator, shortcodes: null, includeTagged: body.include_tagged === true };
     }
     const list = body.shortcodes;
     if (!Array.isArray(list) || list.length === 0) throw new HttpError(400, { error: 'shortcodes must be a non-empty array' });
@@ -74,7 +75,7 @@ function parseTarget(body) {
             throw new HttpError(400, { error: 'Every shortcode must be a string of 1 to 100 characters' });
         }
     }
-    return { creator: null, shortcodes: [...new Set(list)] };
+    return { creator: null, shortcodes: [...new Set(list)], includeTagged: false };
 }
 
 // Opens a transaction on a pooled client and checks the project belongs to the user.
@@ -103,7 +104,12 @@ function selection(spec, projectId, target) {
     let where = `pp.project_id = $1 AND ${spec.from}`;
     if (target.creator !== null) {
         params.push(target.creator);
-        where += ' AND lower(p.owner_username) = lower($2)';
+        // include_tagged also matches posts where the account is a COAUTHOR or CAPTION_USER (a post
+        // owned by someone else that features them); that is how the extension counts a profile.
+        where += target.includeTagged
+            ? ` AND (lower(p.owner_username) = lower($2) OR EXISTS (SELECT 1 FROM post_relations r
+                    WHERE r.post_shortcode = p.shortcode AND r.relation_type IN ('COAUTHOR', 'CAPTION_USER') AND lower(r.username) = lower($2)))`
+            : ' AND lower(p.owner_username) = lower($2)';
     } else {
         params.push(target.shortcodes);
         where += ' AND pp.post_shortcode = ANY($2::text[])';
@@ -154,7 +160,7 @@ router.post('/users/:userId/projects/:projectId/posts/action', verifyAdmin, asyn
             await finish(client, false);
             return res.json({
                 success: true, dry_run: true, action: body.action, affected: r.rows[0].n,
-                creator: target.creator, sample: r.rows[0].sample || [],
+                creator: target.creator, include_tagged: target.includeTagged, sample: r.rows[0].sample || [],
             });
         }
 
@@ -174,7 +180,7 @@ router.post('/users/:userId/projects/:projectId/posts/action', verifyAdmin, asyn
             action: spec.audit, target_user_id: userId, target_email: project.email,
             detail: {
                 project_id: projectId, project_name: project.name, post_action: body.action,
-                creator: target.creator, shortcodes: target.shortcodes ? target.shortcodes.length : null, affected: ids.length,
+                creator: target.creator, include_tagged: target.includeTagged, shortcodes: target.shortcodes ? target.shortcodes.length : null, affected: ids.length,
             },
         });
         res.json({ success: true, dry_run: false, action: body.action, affected: ids.length });
@@ -257,20 +263,31 @@ router.get('/users/:userId/projects/:projectId/creators', verifyAdmin, async (re
         const found = await pool.query('SELECT id FROM projects WHERE id = $1 AND user_id = $2', [projectId, userId]);
         if (found.rows.length === 0) throw new HttpError(404, { error: 'Project not found for this user' });
         const result = await pool.query(
-            `WITH counts AS (
-                 SELECT lower(p.owner_username) AS key, min(p.owner_username) AS username,
-                        count(*) FILTER (WHERE pp.is_hidden = false AND pp.deleted_at IS NULL)::int AS visible,
-                        count(*) FILTER (WHERE pp.is_hidden = true AND pp.deleted_at IS NULL)::int AS hidden,
-                        count(*) FILTER (WHERE pp.deleted_at IS NOT NULL)::int AS deleted
+            `WITH appearances AS (
+                 SELECT pp.id AS link_id, pp.is_hidden, pp.deleted_at, x.username, x.is_owner
                    FROM project_posts pp JOIN posts p ON p.shortcode = pp.post_shortcode
-                  WHERE pp.project_id = $1 AND p.owner_username IS NOT NULL
-                  GROUP BY lower(p.owner_username)
+                  CROSS JOIN LATERAL (
+                        SELECT p.owner_username AS username, true AS is_owner WHERE p.owner_username IS NOT NULL
+                        UNION ALL
+                        SELECT r.username, false FROM post_relations r
+                         WHERE r.post_shortcode = p.shortcode AND r.relation_type IN ('COAUTHOR', 'CAPTION_USER') AND r.username IS NOT NULL
+                  ) x
+                  WHERE pp.project_id = $1
+             ), counts AS (
+                 SELECT lower(username) AS key, min(username) AS username,
+                        count(DISTINCT link_id) FILTER (WHERE is_hidden = false AND deleted_at IS NULL)::int AS visible,
+                        count(DISTINCT link_id) FILTER (WHERE is_hidden = true AND deleted_at IS NULL)::int AS hidden,
+                        count(DISTINCT link_id) FILTER (WHERE deleted_at IS NOT NULL)::int AS deleted,
+                        count(DISTINCT link_id) FILTER (WHERE is_owner)::int AS owned
+                   FROM appearances GROUP BY lower(username)
              ), profiles AS (
                  SELECT lower(username) AS key, min(username) AS username, min(role) AS role
                    FROM project_profiles WHERE project_id = $1 GROUP BY lower(username)
              )
-             SELECT COALESCE(c.username, f.username) AS username, COALESCE(f.role, 'collaborator') AS role,
-                    COALESCE(c.visible, 0) AS visible, COALESCE(c.hidden, 0) AS hidden, COALESCE(c.deleted, 0) AS deleted
+             SELECT COALESCE(c.username, f.username) AS username,
+                    COALESCE(f.role, CASE WHEN COALESCE(c.owned, 0) > 0 THEN 'collaborator' ELSE 'tagged' END) AS role,
+                    COALESCE(c.visible, 0) AS visible, COALESCE(c.hidden, 0) AS hidden, COALESCE(c.deleted, 0) AS deleted,
+                    COALESCE(c.owned, 0) AS owned
                FROM counts c FULL JOIN profiles f ON f.key = c.key
               ORDER BY COALESCE(c.visible, 0) + COALESCE(c.hidden, 0) + COALESCE(c.deleted, 0) DESC, 1`,
             [projectId]
